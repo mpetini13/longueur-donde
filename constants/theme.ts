@@ -74,12 +74,14 @@ export const PALETTE = {
 
 // Couleur de fond par phase
 export const PHASE_BG: Record<string, string> = {
-  home:   PALETTE.purple,
-  setup:  PALETTE.purple,
-  clue:   PALETTE.blue,
-  guess:  PALETTE.teal,
-  reveal: PALETTE.amber,
-  end:    PALETTE.purple,
+  home:    PALETTE.purple,
+  setup:   PALETTE.purple,
+  rules:   PALETTE.purpleDark,
+  clue:    PALETTE.blue,
+  handoff: '#312E81',
+  guess:   PALETTE.teal,
+  reveal:  PALETTE.amber,
+  end:     PALETTE.purple,
 };
 
 // Couleurs des avatars joueurs
