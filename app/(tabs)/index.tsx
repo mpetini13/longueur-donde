@@ -33,19 +33,21 @@ const DIAL_W = SCREEN_WIDTH - 48;
 const DIAL_R = DIAL_W / 2;
 
 // ── Cadran ────────────────────────────────────────────────────────────────────
-const N_SEC    = 20;                         // secteurs fins
+const N_SEC    = 60;                         // beaucoup de secteurs → transitions douces
 const SEC_DEG  = 180 / N_SEC;
-const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 1.04;
+const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 1.10;
 const SEC_PCT  = 100 / N_SEC;
-const NEEDLE_W = 6;                          // aiguille visible
+const NEEDLE_W = 6;
 const NEEDLE_L = DIAL_R * 0.70;
-const HUB_R    = Math.round(DIAL_R * 0.21); // grand hub rouge central
+const HUB_R    = Math.round(DIAL_R * 0.26); // hub bien visible
 const LABEL_H  = 36;
 const DIAL_H   = DIAL_R + HUB_R + LABEL_H;
 
 // ── Zones ─────────────────────────────────────────────────────────────────────
-const ZONES_NORMAL = { z5: 2.5, z3: 5, z1: 7 };
-const ZONES_EXPERT = { z5: 1, z3: 2.5, z1: 4 };
+// Normal : zones larges pour ressembler au jeu physique
+// Expert : zones serrées comme la version originale
+const ZONES_NORMAL = { z5: 7, z3: 14, z1: 21 };
+const ZONES_EXPERT = { z5: 2.5, z3: 5, z1: 7 };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
@@ -666,7 +668,7 @@ export default function HomeScreen() {
               { n: '2', t: "Donner un indice", d: "Un seul mot ou courte phrase pour guider les autres vers la position." },
               { n: '3', t: "Passer le téléphone", d: "Les autres reçoivent le téléphone. Ils ne doivent pas avoir vu le cadran." },
               { n: '4', t: "Deviner ensemble", d: "L'équipe discute et place l'aiguille là où elle pense que la cible se trouve." },
-              { n: '5', t: "Les points", d: "Bullseye (±2.5%) : 5 pts • Proche (±5%) : 3 pts • Autour (±7%) : 1 pt • Raté : 0 pt" },
+              { n: '5', t: "Les points", d: "Bullseye (±7%) : 5 pts • Proche (±14%) : 3 pts • Autour (±21%) : 1 pt • Raté : 0 pt" },
               { n: '★', t: "Bonus Équipe !", d: "En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d'indice." },
             ].map((rule, i) => (
               <View key={i} style={s.ruleRow}>
@@ -849,7 +851,7 @@ export default function HomeScreen() {
                   <View style={[s.optionRow, { marginTop: 12 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={s.optionTitle}>🔥 Mode Expert</Text>
-                      <Text style={s.optionDesc}>Zones resserrées — bullseye ±1%, proche ±2.5%, autour ±4%</Text>
+                      <Text style={s.optionDesc}>Zones resserrées — bullseye ±2.5%, proche ±5%, autour ±7%</Text>
                     </View>
                     <TouchableOpacity activeOpacity={0.8} style={[s.toggle, expertMode && s.toggleOn]} onPress={() => { setExpertMode(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}>
                       <View style={[s.toggleKnob, expertMode && s.toggleKnobOn]} />
