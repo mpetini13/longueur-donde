@@ -28,7 +28,7 @@ import { PALETTE, PHASE_BG, PLAYER_COLORS } from '@/constants/theme';
 import { PACK_ALL_ID, PACK_ALL_PRICE, PACKS, getActiveCards, isUnlocked } from '@/constants/packs';
 
 // ── Dimensions ────────────────────────────────────────────────────────────────
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_H } = Dimensions.get('window');
 const DIAL_W = SCREEN_WIDTH - 48;
 const DIAL_R = DIAL_W / 2;
 
@@ -95,7 +95,7 @@ function ConfettiPiece({ x, color, duration, delay, size }: {
   const y = useSharedValue(-30);
   const rotate = useSharedValue(0);
   useEffect(() => {
-    y.value = withDelay(delay, withRepeat(withTiming(820, { duration, easing: Easing.linear }), -1));
+    y.value = withDelay(delay, withRepeat(withTiming(SCREEN_H + 30, { duration, easing: Easing.linear }), -1));
     rotate.value = withRepeat(withTiming(360, { duration: 900 }), -1);
   }, []);
   const style = useAnimatedStyle(() => ({
@@ -143,6 +143,7 @@ export default function HomeScreen() {
   const [storeConfirm, setStoreConfirm] = useState<string | null>(null);
   const [handoffCountdown, setHandoffCountdown] = useState(3);
   const [showBullseye, setShowBullseye] = useState(false);
+  const [guessPosSaved, setGuessPosSaved] = useState(50);
 
   // Refs
   const guessPosRef   = useRef(50);
@@ -164,12 +165,14 @@ export default function HomeScreen() {
   }, []);
 
   // ── Animations ──────────────────────────────────────────────────────────────
-  const logoScale    = useSharedValue(1);
-  const homeOpacity  = useSharedValue(0);
-  const scoreScale   = useSharedValue(0);
-  const needleShared = useSharedValue(50);
-  const transOpacity = useSharedValue(1);
-  const bullseyeOp   = useSharedValue(0);
+  const logoScale      = useSharedValue(1);
+  const homeOpacity    = useSharedValue(0);
+  const scoreScale     = useSharedValue(0);
+  const needleShared   = useSharedValue(50);
+  const transOpacity   = useSharedValue(1);
+  const bullseyeOp     = useSharedValue(0);
+  const timerPulse     = useSharedValue(1);
+  const countdownScale = useSharedValue(1);
 
   const logoStyle = useAnimatedStyle(() => ({ transform: [{ scale: logoScale.value }] }));
   const homeStyle = useAnimatedStyle(() => ({
@@ -192,8 +195,10 @@ export default function HomeScreen() {
       transform: [{ rotate: `${rotDeg}deg` }],
     };
   });
-  const transStyle   = useAnimatedStyle(() => ({ opacity: transOpacity.value }));
-  const bullseyeStyle = useAnimatedStyle(() => ({ opacity: bullseyeOp.value }));
+  const transStyle      = useAnimatedStyle(() => ({ opacity: transOpacity.value }));
+  const bullseyeStyle   = useAnimatedStyle(() => ({ opacity: bullseyeOp.value }));
+  const timerPulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: timerPulse.value }] }));
+  const countdownStyle  = useAnimatedStyle(() => ({ transform: [{ scale: countdownScale.value }] }));
 
   useEffect(() => {
     homeOpacity.value = withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
@@ -222,6 +227,30 @@ export default function HomeScreen() {
     if (timeLeft === 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     else if (timeLeft <= 5) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, [timeLeft]);
+
+  // Timer pulse quand urgent
+  const timerUrgentActive = timerEnabled && phase === 'clue' && timeLeft <= 10 && timeLeft > 0;
+  useEffect(() => {
+    if (timerUrgentActive) {
+      timerPulse.value = withRepeat(
+        withSequence(
+          withTiming(1.18, { duration: 280 }),
+          withTiming(1.0,  { duration: 280 }),
+        ), -1, false,
+      );
+    } else {
+      timerPulse.value = withTiming(1, { duration: 150 });
+    }
+  }, [timerUrgentActive]);
+
+  // Countdown pulse à chaque chiffre
+  useEffect(() => {
+    if (phase !== 'handoff' || handoffCountdown <= 0) return;
+    countdownScale.value = withSequence(
+      withTiming(1.4, { duration: 90 }),
+      withSpring(1.0, { damping: 7, stiffness: 200 }),
+    );
+  }, [handoffCountdown]);
 
   // Countdown handoff
   useEffect(() => {
@@ -355,6 +384,7 @@ export default function HomeScreen() {
   };
 
   const submitGuess = () => {
+    setGuessPosSaved(guessPosRef.current);
     const dist = Math.abs(guessPosRef.current - targetPos);
     let pts = 0;
     if (dist <= zones.z5) pts = 5;
@@ -566,9 +596,9 @@ export default function HomeScreen() {
     const podiumColors = [PALETTE.gray200, PALETTE.amber, PALETTE.gray400];
     return (
       <View style={s.podiumWrap}>
-        {podiumOrder.map((rank) => {
+        {podiumOrder.map((rank, di) => {
           const player = sorted[rank];
-          if (!player) return null;
+          if (!player) return <View key={rank} style={s.podiumCol} />;
           const ci = players.findIndex(p => p.name === player.name);
           return (
             <View key={rank} style={s.podiumCol}>
@@ -580,7 +610,7 @@ export default function HomeScreen() {
               <Text style={[s.podiumScore, rank === 0 && { color: PALETTE.amber }]}>
                 {player.score} pts
               </Text>
-              <View style={[s.podiumBlock, { height: podiumH[rank], backgroundColor: podiumColors[rank] }]} />
+              <View style={[s.podiumBlock, { height: podiumH[di], backgroundColor: podiumColors[di] }]} />
             </View>
           );
         })}
@@ -605,7 +635,7 @@ export default function HomeScreen() {
   });
 
   const timerColor = timeLeft <= 5 ? PALETTE.red : timeLeft <= 15 ? PALETTE.amber : PALETTE.green;
-  const timerUrgent = timerEnabled && phase === 'clue' && timeLeft <= 10;
+  const timerUrgent = timerUrgentActive;
   const bg = PHASE_BG[phase] ?? PALETTE.purple;
   const showProgress = ['clue', 'handoff', 'guess', 'reveal'].includes(phase);
   const unlockedPacks = PACKS.filter(p => isUnlocked(p.id, purchasedPacks));
@@ -762,7 +792,11 @@ export default function HomeScreen() {
                 <>
                   <View style={s.hRow}>
                     <Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text>
-                    {timerEnabled && <View style={[s.timerBadge, { backgroundColor: timerColor }]}><Text style={s.timerTxt}>⏱ {timeLeft}s</Text></View>}
+                    {timerEnabled && (
+                      <Animated.View style={[s.timerBadge, { backgroundColor: timerColor }, timerPulseStyle]}>
+                        <Text style={s.timerTxt}>⏱ {timeLeft}s</Text>
+                      </Animated.View>
+                    )}
                   </View>
                   <Text style={s.hTitle}>🎭 {players[currentGiver].name}</Text>
                   <Text style={s.hSub}>donne l'indice{timerUrgent ? ' — DÉPÊCHE-TOI !' : ''}</Text>
@@ -885,7 +919,7 @@ export default function HomeScreen() {
                   </View>
                   {handoffCountdown > 0 ? (
                     <View style={s.countdownBox}>
-                      <Text style={s.countdownNum}>{handoffCountdown}</Text>
+                      <Animated.Text style={[s.countdownNum, countdownStyle]}>{handoffCountdown}</Animated.Text>
                       <Text style={s.countdownSub}>secondes avant de jouer…</Text>
                     </View>
                   ) : (
@@ -919,6 +953,9 @@ export default function HomeScreen() {
                   <Animated.View style={[s.scoreReveal, scoreStyle]}>
                     <Text style={[s.scoreNum, { color: scoreColors[roundPoints] }]}>+{displayScore}</Text>
                     <Text style={s.scoreMsg}>{scoreMsgs[roundPoints]}</Text>
+                    <Text style={s.distanceTxt}>
+                      Vous étiez à <Text style={s.distanceBold}>{Math.abs(guessPosSaved - targetPos).toFixed(1)}%</Text> de la cible
+                    </Text>
                     {teamBonus && <View style={s.bonusBadge}><Text style={s.bonusTxt}>🎯 BONUS ÉQUIPE +1</Text></View>}
                     {expertMode && <View style={[s.bonusBadge, { backgroundColor: PALETTE.amberLight, marginTop: 6 }]}><Text style={[s.bonusTxt, { color: PALETTE.amberDark }]}>🔥 Mode Expert</Text></View>}
                   </Animated.View>
@@ -1118,9 +1155,11 @@ const s = StyleSheet.create({
   dialLblL: { left: 0 },
   dialLblR: { right: 0 },
 
-  scoreReveal: { alignItems: 'center', paddingVertical: 20 },
-  scoreNum:    { fontSize: 84, fontWeight: '900', lineHeight: 90 },
-  scoreMsg:    { fontSize: 18, color: PALETTE.gray600, marginTop: 4, fontWeight: '600' },
+  scoreReveal:  { alignItems: 'center', paddingVertical: 20 },
+  scoreNum:     { fontSize: 84, fontWeight: '900', lineHeight: 90 },
+  scoreMsg:     { fontSize: 18, color: PALETTE.gray600, marginTop: 4, fontWeight: '600' },
+  distanceTxt:  { fontSize: 13, color: PALETTE.gray400, marginTop: 6, marginBottom: 4 },
+  distanceBold: { fontWeight: '700', color: PALETTE.gray600 },
   bonusBadge:  { marginTop: 12, backgroundColor: PALETTE.purpleLight, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 7 },
   bonusTxt:    { fontSize: 14, fontWeight: '700', color: PALETTE.purple },
 
