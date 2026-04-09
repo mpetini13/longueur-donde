@@ -14,7 +14,6 @@ import * as Haptics from 'expo-haptics';
 import {
   Dimensions,
   PanResponder,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -23,6 +22,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { PALETTE, PHASE_BG, PLAYER_COLORS } from '@/constants/theme';
 
 // ── Dimensions ────────────────────────────────────────────────────────────────
