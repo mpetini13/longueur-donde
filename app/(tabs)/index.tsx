@@ -43,8 +43,8 @@ const LABEL_H  = 34;
 const DIAL_H   = DIAL_R + PIVOT_R + LABEL_H;
 
 // ── Zones ─────────────────────────────────────────────────────────────────────
-const ZONES_NORMAL = { z5: 2.5, z3: 10, z1: 15 };
-const ZONES_EXPERT = { z5: 1,   z3: 5,  z1: 8  };
+const ZONES_NORMAL = { z5: 2.5, z3: 5,  z1: 7  };
+const ZONES_EXPERT = { z5: 1,   z3: 2.5, z1: 4 };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
@@ -164,7 +164,9 @@ export default function HomeScreen() {
   // Timer
   const [timeLeft, setTimeLeft] = useState(60);
 
-  const guessPosRef = useRef(50);
+  const guessPosRef   = useRef(50);
+  const dialRef       = useRef<View>(null);
+  const dialOriginRef = useRef({ x: 0, y: 0 });
 
   // ── Animations ──────────────────────────────────────────────────────────────
   const logoScale    = useSharedValue(1);
@@ -186,10 +188,12 @@ export default function HomeScreen() {
     transform: [{ rotate: `${(needleShared.value / 100 - 0.5) * 180}deg` }],
   }));
   const tipStyle = useAnimatedStyle(() => {
-    const θ = pctToAngle(needleShared.value);
+    const θ      = pctToAngle(needleShared.value);
+    const rotDeg = (needleShared.value / 100 - 0.5) * 180;
     return {
-      left: DIAL_R + NEEDLE_L * Math.cos(θ) - 7,
-      top:  DIAL_R - NEEDLE_L * Math.sin(θ) - 7,
+      left: DIAL_R + NEEDLE_L * Math.cos(θ),
+      top:  DIAL_R - NEEDLE_L * Math.sin(θ),
+      transform: [{ rotate: `${rotDeg}deg` }],
     };
   });
   const transStyle = useAnimatedStyle(() => ({ opacity: transOpacity.value }));
@@ -236,13 +240,17 @@ export default function HomeScreen() {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder:  () => true,
       onPanResponderGrant: (e) => {
-        const p = touchToPct(e.nativeEvent.locationX, e.nativeEvent.locationY);
+        const tx = e.nativeEvent.pageX - dialOriginRef.current.x;
+        const ty = e.nativeEvent.pageY - dialOriginRef.current.y;
+        const p = touchToPct(tx, ty);
         needleShared.value = withSpring(p, { damping: 14, stiffness: 260 });
         guessPosRef.current = p;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       },
       onPanResponderMove: (e) => {
-        const p = touchToPct(e.nativeEvent.locationX, e.nativeEvent.locationY);
+        const tx = e.nativeEvent.pageX - dialOriginRef.current.x;
+        const ty = e.nativeEvent.pageY - dialOriginRef.current.y;
+        const p = touchToPct(tx, ty);
         needleShared.value  = p;
         guessPosRef.current = p;
       },
@@ -379,6 +387,12 @@ export default function HomeScreen() {
     showTarget = false, showCursor = false, interactive = false,
   }: { showTarget?: boolean; showCursor?: boolean; interactive?: boolean }) => (
     <View
+      ref={interactive ? dialRef : undefined}
+      onLayout={interactive ? () => {
+        dialRef.current?.measure((_x, _y, _w, _h, pageX, pageY) => {
+          dialOriginRef.current = { x: pageX, y: pageY };
+        });
+      } : undefined}
       style={{ width: DIAL_W, height: DIAL_H, alignSelf: 'center', marginBottom: 12 }}
       {...(interactive ? pan.panHandlers : {})}
     >
@@ -432,13 +446,14 @@ export default function HomeScreen() {
           }, needleRotStyle]} />
         )}
 
-        {/* Bout de l'aiguille */}
+        {/* Flèche au bout de l'aiguille (triangle CSS, tourne avec l'aiguille) */}
         {showCursor && (
           <Animated.View style={[{
             position: 'absolute',
-            width: 14, height: 14, borderRadius: 7,
-            backgroundColor: '#fff',
-            borderWidth: 2, borderColor: '#94A3B8',
+            width: 0, height: 0,
+            borderLeftWidth: 7, borderRightWidth: 7, borderBottomWidth: 13,
+            borderLeftColor: 'transparent', borderRightColor: 'transparent',
+            borderBottomColor: '#fff',
           }, tipStyle]} />
         )}
 
@@ -587,7 +602,7 @@ export default function HomeScreen() {
 
             {/* Feuille blanche */}
             <View style={s.sheet}>
-              <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} scrollEnabled={phase !== 'guess'}>
 
                 {/* SETUP */}
                 {phase === 'setup' && <>
