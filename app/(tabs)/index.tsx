@@ -62,18 +62,21 @@ function touchToPct(tx: number, ty: number): number {
   return Math.max(1, Math.min(99, (1 - Math.min(Math.PI, θ) / Math.PI) * 100));
 }
 
-// Couleur d'un secteur i (gauche=cyan, droite=rouge)
-function secColor(i: number): string {
-  const hue = Math.round(185 - (i / (N_SEC - 1)) * 185);
-  return `hsl(${hue}, 90%, 56%)`;
-}
+// Couleur d'un secteur selon sa proximité avec la cible
+// Quand showTarget=false : tout est sombre (phase devinette)
+// Quand showTarget=true  : rouge=bullseye, orange=proche, jaune=autour, sombre=ailleurs
+const SEC_PCT = 100 / N_SEC; // % du spectre couvert par un secteur
 
-// Couleur de zone
-function zoneColor(dist: number): string {
-  if (dist <= ZONE_5) return '#4ADE80';
-  if (dist <= ZONE_3) return '#FACC15';
-  if (dist <= ZONE_1) return '#FB923C';
-  return '';
+function secColor(i: number, targetPct: number, showTarget: boolean): string {
+  const DARK = '#14243A';
+  if (!showTarget) return DARK;
+  const center = (i + 0.5) * SEC_PCT;
+  const dist   = Math.abs(center - targetPct);
+  // On ajoute SEC_PCT/2 pour qu'un secteur qui chevauche une zone soit coloré
+  if (dist <= ZONE_5 + SEC_PCT / 2) return '#EF4444'; // rouge  — bullseye
+  if (dist <= ZONE_3 + SEC_PCT / 2) return '#F97316'; // orange — proche
+  if (dist <= ZONE_1 + SEC_PCT / 2) return '#EAB308'; // jaune  — autour
+  return DARK;
 }
 
 // ── Cartes ─────────────────────────────────────────────────────────────────────
@@ -235,11 +238,11 @@ export default function HomeScreen() {
           position: 'absolute', left: 0, top: 0,
           width: DIAL_W, height: DIAL_R + PIVOT_R,
           borderTopLeftRadius: DIAL_R, borderTopRightRadius: DIAL_R,
-          backgroundColor: '#0B1628',
+          backgroundColor: '#14243A',
           overflow: 'hidden',
         }}>
 
-          {/* Secteurs colorés */}
+          {/* Secteurs : sombres partout, colorés seulement près de la cible */}
           {Array.from({ length: N_SEC }, (_, i) => {
             const cssRot = -180 + (i + 0.5) * SEC_DEG;
             return (
@@ -247,28 +250,10 @@ export default function HomeScreen() {
                 position: 'absolute',
                 left: DIAL_R, top: DIAL_R - SEC_H / 2,
                 width: DIAL_R, height: SEC_H,
-                backgroundColor: secColor(i),
+                backgroundColor: secColor(i, targetPos, showTarget),
                 // @ts-ignore — RN 0.81 supporte transformOrigin
                 transformOrigin: 'left center',
                 transform: [{ rotate: `${cssRot}deg` }],
-              }} />
-            );
-          })}
-
-          {/* Points de zone (phase indice) */}
-          {showTarget && Array.from({ length: 100 }, (_, i) => {
-            const pct  = (i / 99) * 100;
-            const dist = Math.abs(pct - targetPos);
-            const zc   = zoneColor(dist);
-            if (!zc) return null;
-            const pos  = arcPos(pct, DIAL_R * 0.90);
-            const sz   = dist <= ZONE_5 ? 12 : dist <= ZONE_3 ? 9 : 7;
-            return (
-              <View key={`z${i}`} style={{
-                position: 'absolute',
-                left: pos.x - sz / 2, top: pos.y - sz / 2,
-                width: sz, height: sz, borderRadius: sz / 2,
-                backgroundColor: zc,
               }} />
             );
           })}
@@ -278,7 +263,7 @@ export default function HomeScreen() {
             position: 'absolute',
             left: DIAL_R - INNER_R, top: DIAL_R - INNER_R,
             width: INNER_R * 2, height: INNER_R * 2, borderRadius: INNER_R,
-            backgroundColor: '#0B1628',
+            backgroundColor: '#14243A',
           }} />
 
           {/* Étoiles décoratives */}
