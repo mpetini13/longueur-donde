@@ -462,6 +462,35 @@ export default function HomeScreen() {
             }} />
           ))}
 
+          {/* ── Chiffres sur les zones ── */}
+          {showTarget && (() => {
+            const z = zones;
+            const r = DIAL_R * 0.60;
+            const items: Array<{ pct: number; pts: string }> = [
+              { pct: targetPos,                         pts: '5' },
+              { pct: targetPos + (z.z5 + z.z3) / 2,    pts: '3' },
+              { pct: targetPos - (z.z5 + z.z3) / 2,    pts: '3' },
+              { pct: targetPos + (z.z3 + z.z1) / 2,    pts: '1' },
+              { pct: targetPos - (z.z3 + z.z1) / 2,    pts: '1' },
+            ];
+            return items.map(({ pct, pts }, i) => {
+              const p = Math.max(2, Math.min(98, pct));
+              const θ = pctToAngle(p);
+              const cx = DIAL_R + r * Math.cos(θ);
+              const cy = DIAL_R - r * Math.sin(θ);
+              return (
+                <Text key={i} style={{
+                  position: 'absolute',
+                  left: cx - 11, top: cy - 11,
+                  width: 22, height: 22,
+                  textAlign: 'center', lineHeight: 22,
+                  fontSize: 13, fontWeight: '900',
+                  color: 'rgba(255,255,255,0.95)',
+                }}>{pts}</Text>
+              );
+            });
+          })()}
+
           {/* ── Masque hub (cache la base des secteurs) ── */}
           <View style={{
             position: 'absolute',
