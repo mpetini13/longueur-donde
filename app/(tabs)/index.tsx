@@ -33,24 +33,21 @@ const DIAL_W = SCREEN_WIDTH - 48;
 const DIAL_R = DIAL_W / 2;
 
 // ── Cadran ────────────────────────────────────────────────────────────────────
-const N_SEC    = 18;                         // plus de secteurs = zones plus précises
+const N_SEC    = 60;                         // beaucoup de secteurs → transitions douces
 const SEC_DEG  = 180 / N_SEC;
-const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 1.02; // jointifs
+const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 1.10;
 const SEC_PCT  = 100 / N_SEC;
-const NEEDLE_W = 4;                          // aiguille fine
-const NEEDLE_L = DIAL_R * 0.72;
-const PIVOT_R  = 14;
-const INNER_R  = DIAL_R * 0.22;
-const RING_W   = 6;                          // épaisseur de l'anneau extérieur
+const NEEDLE_W = 6;
+const NEEDLE_L = DIAL_R * 0.70;
+const HUB_R    = Math.round(DIAL_R * 0.26); // hub bien visible
 const LABEL_H  = 36;
-const DIAL_H   = DIAL_R + PIVOT_R + LABEL_H;
-
-// Graduation marks : 9 marques tous les 12.5%
-const TICK_PCTS = [0, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100];
+const DIAL_H   = DIAL_R + HUB_R + LABEL_H;
 
 // ── Zones ─────────────────────────────────────────────────────────────────────
-const ZONES_NORMAL = { z5: 2.5, z3: 5, z1: 7 };
-const ZONES_EXPERT = { z5: 1, z3: 2.5, z1: 4 };
+// Normal : zones larges pour ressembler au jeu physique
+// Expert : zones serrées comme la version originale
+const ZONES_NORMAL = { z5: 7, z3: 14, z1: 21 };
+const ZONES_EXPERT = { z5: 2.5, z3: 5, z1: 7 };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
@@ -69,14 +66,35 @@ function secColor(
   i: number, targetPct: number, showTarget: boolean,
   zones: { z5: number; z3: number; z1: number },
 ): string {
-  const DARK = '#0F1F33';
-  if (!showTarget) return DARK;
+  // Pas de cible visible → couleur unie claire (phase devinette)
+  if (!showTarget) return '#C2EBF2';
+  // Cible visible → fond sombre + zones colorées
   const center = (i + 0.5) * SEC_PCT;
   const dist = Math.abs(center - targetPct);
   if (dist <= zones.z5 + SEC_PCT / 2) return '#EF4444';
   if (dist <= zones.z3 + SEC_PCT / 2) return '#F97316';
-  if (dist <= zones.z1 + SEC_PCT / 2) return '#EAB308';
-  return DARK;
+  if (dist <= zones.z1 + SEC_PCT / 2) return '#FBBF24';
+  return '#0D1B2A';
+}
+
+// ── Wave dots animés ──────────────────────────────────────────────────────────
+function WaveDot({ delay, size, opacity }: { delay: number; size: number; opacity: number }) {
+  const y = useSharedValue(0);
+  useEffect(() => {
+    y.value = withDelay(delay, withRepeat(
+      withSequence(
+        withTiming(-9, { duration: 500, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0,  { duration: 500, easing: Easing.inOut(Easing.sin) }),
+      ), -1, false,
+    ));
+  }, []);
+  const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
+  return (
+    <Animated.View style={[{
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: 'rgba(255,255,255,0.9)', opacity,
+    }, style]} />
+  );
 }
 
 // ── Confettis ─────────────────────────────────────────────────────────────────
@@ -186,15 +204,6 @@ export default function HomeScreen() {
   const needleRotStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${(needleShared.value / 100 - 0.5) * 180}deg` }],
   }));
-  const tipStyle = useAnimatedStyle(() => {
-    const θ = pctToAngle(needleShared.value);
-    const rotDeg = (needleShared.value / 100 - 0.5) * 180;
-    return {
-      left: DIAL_R + NEEDLE_L * Math.cos(θ),
-      top: DIAL_R - NEEDLE_L * Math.sin(θ),
-      transform: [{ rotate: `${rotDeg}deg` }],
-    };
-  });
   const transStyle      = useAnimatedStyle(() => ({ opacity: transOpacity.value }));
   const bullseyeStyle   = useAnimatedStyle(() => ({ opacity: bullseyeOp.value }));
   const timerPulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: timerPulse.value }] }));
@@ -211,7 +220,7 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    transOpacity.value = withTiming(1, { duration: 260, easing: Easing.out(Easing.quad) });
+    transOpacity.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.cubic) });
   }, [phase]);
 
   // Timer
@@ -301,11 +310,12 @@ export default function HomeScreen() {
     targetPos < 30 ? 'plutôt à gauche' : targetPos > 70 ? 'plutôt à droite' : 'vers le centre';
   const zones = expertMode ? ZONES_EXPERT : ZONES_NORMAL;
 
-  const scoreMsgs   = ['Raté ! 😬', 'Proche ! 👍', 'Bien ! 🎯', '', 'Très bien ! ⭐', 'Parfait ! 🎉'];
-  const scoreColors = [PALETTE.red, PALETTE.coral, PALETTE.amber, PALETTE.amber, PALETTE.green, PALETTE.green];
+  // Index = pts (0,1,2,3,4,5) — seuls 0, 1, 3, 5 sont utilisés dans ce jeu
+  const scoreMsgs   = ['Raté ! 😬', 'Proche ! 👍', '', 'Bien joué ! 🎯', '', 'BULLSEYE ! 🎉'];
+  const scoreColors = [PALETTE.red, PALETTE.coral, PALETTE.amber, PALETTE.blue, PALETTE.blue, PALETTE.green];
 
   const changePhase = (p: Phase) => {
-    transOpacity.value = withTiming(0, { duration: 160 }, (done) => {
+    transOpacity.value = withTiming(0, { duration: 120, easing: Easing.in(Easing.quad) }, (done) => {
       if (done) runOnJS(setPhase)(p);
     });
   };
@@ -441,141 +451,144 @@ export default function HomeScreen() {
   // ── Cadran ────────────────────────────────────────────────────────────────────
   const renderDial = ({
     showTarget = false, showCursor = false, interactive = false,
-  }: { showTarget?: boolean; showCursor?: boolean; interactive?: boolean }) => (
-    <View
-      ref={interactive ? dialRef : undefined}
-      onLayout={interactive ? () => {
-        dialRef.current?.measure((_x, _y, _w, _h, pageX, pageY) => {
-          dialOriginRef.current = { x: pageX, y: pageY };
-        });
-      } : undefined}
-      style={{ width: DIAL_W, height: DIAL_H, alignSelf: 'center', marginBottom: 12 }}
-      {...(interactive ? pan.panHandlers : {})}
-    >
-      {/* Fond principal + clipping demi-cercle */}
-      <View style={{
-        position: 'absolute', left: 0, top: 0,
-        width: DIAL_W, height: DIAL_R + PIVOT_R,
-        borderTopLeftRadius: DIAL_R, borderTopRightRadius: DIAL_R,
-        backgroundColor: '#0F1F33', overflow: 'hidden',
-      }}>
-
-        {/* ── Secteurs ── */}
-        {Array.from({ length: N_SEC }, (_, i) => (
-          <View key={i} style={{
-            position: 'absolute',
-            left: DIAL_R, top: DIAL_R - SEC_H / 2,
-            width: DIAL_R, height: SEC_H,
-            backgroundColor: secColor(i, targetPos, showTarget, zones),
-            // @ts-ignore
-            transformOrigin: 'left center',
-            transform: [{ rotate: `${-180 + (i + 0.5) * SEC_DEG}deg` }],
-          }} />
-        ))}
-
-        {/* ── Anneau extérieur (décoratif) ── */}
+  }: { showTarget?: boolean; showCursor?: boolean; interactive?: boolean }) => {
+    const bgColor = showTarget ? '#0D1B2A' : '#C2EBF2';
+    return (
+      <View
+        ref={interactive ? dialRef : undefined}
+        onLayout={interactive ? () => {
+          dialRef.current?.measure((_x, _y, _w, _h, pageX, pageY) => {
+            dialOriginRef.current = { x: pageX, y: pageY };
+          });
+        } : undefined}
+        style={{ width: DIAL_W, height: DIAL_H, alignSelf: 'center', marginBottom: 12 }}
+        {...(interactive ? pan.panHandlers : {})}
+      >
+        {/* Fond + clipping demi-cercle */}
         <View style={{
           position: 'absolute', left: 0, top: 0,
-          width: DIAL_W, height: DIAL_R + PIVOT_R,
+          width: DIAL_W, height: DIAL_R + HUB_R,
           borderTopLeftRadius: DIAL_R, borderTopRightRadius: DIAL_R,
-          borderTopWidth: RING_W, borderLeftWidth: RING_W, borderRightWidth: RING_W,
-          borderBottomWidth: 0, borderColor: 'rgba(255,255,255,0.18)',
+          backgroundColor: bgColor, overflow: 'hidden',
+        }}>
+
+          {/* ── Secteurs colorés ── */}
+          {Array.from({ length: N_SEC }, (_, i) => (
+            <View key={i} style={{
+              position: 'absolute',
+              left: DIAL_R, top: DIAL_R - SEC_H / 2,
+              width: DIAL_R, height: SEC_H,
+              backgroundColor: secColor(i, targetPos, showTarget, zones),
+              // @ts-ignore
+              transformOrigin: 'left center',
+              transform: [{ rotate: `${-180 + (i + 0.5) * SEC_DEG}deg` }],
+            }} />
+          ))}
+
+          {/* ── Chiffres sur les zones ── */}
+          {showTarget && (() => {
+            const z = zones;
+            const r = DIAL_R * 0.60;
+            const items: Array<{ pct: number; pts: string }> = [
+              { pct: targetPos,                         pts: '5' },
+              { pct: targetPos + (z.z5 + z.z3) / 2,    pts: '3' },
+              { pct: targetPos - (z.z5 + z.z3) / 2,    pts: '3' },
+              { pct: targetPos + (z.z3 + z.z1) / 2,    pts: '1' },
+              { pct: targetPos - (z.z3 + z.z1) / 2,    pts: '1' },
+            ];
+            return items.map(({ pct, pts }, i) => {
+              const p = Math.max(2, Math.min(98, pct));
+              const θ = pctToAngle(p);
+              const cx = DIAL_R + r * Math.cos(θ);
+              const cy = DIAL_R - r * Math.sin(θ);
+              return (
+                <Text key={i} style={{
+                  position: 'absolute',
+                  left: cx - 11, top: cy - 11,
+                  width: 22, height: 22,
+                  textAlign: 'center', lineHeight: 22,
+                  fontSize: 13, fontWeight: '900',
+                  color: 'rgba(255,255,255,0.95)',
+                }}>{pts}</Text>
+              );
+            });
+          })()}
+
+          {/* ── Masque hub (cache la base des secteurs) ── */}
+          <View style={{
+            position: 'absolute',
+            left: DIAL_R - HUB_R, top: DIAL_R - HUB_R,
+            width: HUB_R * 2, height: HUB_R * 2, borderRadius: HUB_R,
+            backgroundColor: bgColor,
+          }} />
+
+          {/* ── Aiguille ── */}
+          {showCursor && (
+            <Animated.View style={[{
+              position: 'absolute',
+              left: DIAL_R - NEEDLE_W / 2, top: DIAL_R - NEEDLE_L,
+              width: NEEDLE_W, height: NEEDLE_L,
+              backgroundColor: '#D63939',
+              borderTopLeftRadius: NEEDLE_W / 2,
+              borderTopRightRadius: NEEDLE_W / 2,
+              shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.35, shadowRadius: 4, elevation: 5,
+              // @ts-ignore
+              transformOrigin: 'bottom',
+            }, needleRotStyle]} />
+          )}
+
+          {/* ── Hub rouge central ── */}
+          <View style={{
+            position: 'absolute',
+            left: DIAL_R - HUB_R, top: DIAL_R - HUB_R,
+            width: HUB_R * 2, height: HUB_R * 2, borderRadius: HUB_R,
+            backgroundColor: '#E53E3E',
+            shadowColor: '#C53030', shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.5, shadowRadius: 6, elevation: 8,
+          }} />
+
+          {/* ── Petit point brillant au centre du hub ── */}
+          <View style={{
+            position: 'absolute',
+            left: DIAL_R - HUB_R * 0.28, top: DIAL_R - HUB_R * 0.6,
+            width: HUB_R * 0.56, height: HUB_R * 0.32, borderRadius: HUB_R * 0.16,
+            backgroundColor: 'rgba(255,255,255,0.25)',
+          }} />
+        </View>
+
+        {/* ── Bordure extérieure (hors overflow:hidden) ── */}
+        <View pointerEvents="none" style={{
+          position: 'absolute', left: 0, top: 0,
+          width: DIAL_W, height: DIAL_R + HUB_R,
+          borderTopLeftRadius: DIAL_R, borderTopRightRadius: DIAL_R,
+          borderTopWidth: 3, borderLeftWidth: 3, borderRightWidth: 3, borderBottomWidth: 0,
+          borderColor: showTarget ? 'rgba(255,255,255,0.2)' : 'rgba(80,170,210,0.45)',
           backgroundColor: 'transparent',
         }} />
 
-        {/* ── Graduations ── */}
-        {TICK_PCTS.map((pct, i) => {
-          const θ = pctToAngle(pct);
-          const isMajor = pct === 0 || pct === 50 || pct === 100;
-          const tickLen = isMajor ? 13 : 8;
-          const r = DIAL_R - RING_W - tickLen / 2 - 1;
-          const cx = DIAL_R + r * Math.cos(θ);
-          const cy = DIAL_R - r * Math.sin(θ);
-          const rotDeg = 90 - (θ * 180) / Math.PI;
-          return (
-            <View key={`t${i}`} style={{
-              position: 'absolute',
-              left: cx - 1.5,
-              top: cy - tickLen / 2,
-              width: 3,
-              height: tickLen,
-              borderRadius: 1.5,
-              backgroundColor: isMajor ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.4)',
-              transform: [{ rotate: `${rotDeg}deg` }],
-            }} />
-          );
-        })}
-
-        {/* ── Hub central (cache la base des secteurs) ── */}
-        <View style={{
-          position: 'absolute',
-          left: DIAL_R - INNER_R, top: DIAL_R - INNER_R,
-          width: INNER_R * 2, height: INNER_R * 2, borderRadius: INNER_R,
-          backgroundColor: '#0F1F33',
-          borderWidth: 2, borderColor: 'rgba(255,255,255,0.12)',
-        }} />
-
-        {/* ── Aiguille ── */}
-        {showCursor && (
-          <Animated.View style={[{
-            position: 'absolute',
-            left: DIAL_R - NEEDLE_W / 2, top: DIAL_R - NEEDLE_L,
-            width: NEEDLE_W, height: NEEDLE_L,
-            backgroundColor: '#F1F5F9',
-            borderRadius: NEEDLE_W / 2,
-            shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.4, shadowRadius: 3, elevation: 4,
-            // @ts-ignore
-            transformOrigin: 'bottom',
-          }, needleRotStyle]} />
-        )}
-
-        {/* ── Flèche au bout de l'aiguille ── */}
-        {showCursor && (
-          <Animated.View style={[{
-            position: 'absolute',
-            width: 0, height: 0,
-            borderLeftWidth: 6, borderRightWidth: 6, borderBottomWidth: 11,
-            borderLeftColor: 'transparent', borderRightColor: 'transparent',
-            borderBottomColor: '#F1F5F9',
-          }, tipStyle]} />
-        )}
-
-        {/* ── Pivot central ── */}
-        <View style={{
-          position: 'absolute',
-          left: DIAL_R - PIVOT_R, top: DIAL_R - PIVOT_R,
-          width: PIVOT_R * 2, height: PIVOT_R * 2, borderRadius: PIVOT_R,
-          backgroundColor: '#1E3A5F',
-          borderWidth: 3, borderColor: '#EF4444',
-          shadowColor: '#EF4444', shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: 0.6, shadowRadius: 6, elevation: 6,
-        }} />
-
-        {/* ── Point central (dessus du pivot) ── */}
-        <View style={{
-          position: 'absolute',
-          left: DIAL_R - 4, top: DIAL_R - 4,
-          width: 8, height: 8, borderRadius: 4,
-          backgroundColor: '#EF4444',
-        }} />
+        {/* ── Étiquettes (hors overflow:hidden) ── */}
+        <Text style={[s.dialLbl, s.dialLblL, { top: DIAL_R + HUB_R + 7 }]}>
+          ← {currentCard[0]}
+        </Text>
+        <Text style={[s.dialLbl, s.dialLblR, { top: DIAL_R + HUB_R + 7 }]}>
+          {currentCard[1]} →
+        </Text>
       </View>
-
-      {/* ── Étiquettes (hors overflow:hidden) ── */}
-      <Text style={[s.dialLbl, s.dialLblL, { top: DIAL_R + PIVOT_R + 7, color: PALETTE.blue }]}>
-        {currentCard[0]}
-      </Text>
-      <Text style={[s.dialLbl, s.dialLblR, { top: DIAL_R + PIVOT_R + 7, color: PALETTE.red }]}>
-        {currentCard[1]}
-      </Text>
-    </View>
-  );
+    );
+  };
 
   const renderConcept = () => (
     <View style={s.conceptCard}>
-      <Text style={[s.conceptWord, { color: PALETTE.blue }]}>{currentCard[0]}</Text>
-      <Text style={s.conceptDiv}>←————→</Text>
-      <Text style={[s.conceptWord, { color: PALETTE.red }]}>{currentCard[1]}</Text>
+      <View style={s.conceptSide}>
+        <Text style={s.conceptArrow}>←</Text>
+        <Text style={[s.conceptWord, { color: PALETTE.blue }]} numberOfLines={2}>{currentCard[0]}</Text>
+      </View>
+      <View style={s.conceptDivider} />
+      <View style={s.conceptSide}>
+        <Text style={[s.conceptWord, { color: PALETTE.red }]} numberOfLines={2}>{currentCard[1]}</Text>
+        <Text style={s.conceptArrow}>→</Text>
+      </View>
     </View>
   );
 
@@ -663,20 +676,25 @@ export default function HomeScreen() {
             <Text style={s.homeTitle}>Longueur{'\n'}d'onde</Text>
             <Text style={s.homeSub}>Le jeu qui lit dans les esprits</Text>
             <View style={s.waveDots}>
-              {[0.2, 0.45, 0.7, 0.45, 0.2].map((op, i) => (
-                <View key={i} style={[s.waveDot, { opacity: op, transform: [{ scale: 0.6 + op * 0.8 }] }]} />
+              {[
+                { op: 0.35, sz: 9,  delay: 0   },
+                { op: 0.55, sz: 12, delay: 120  },
+                { op: 0.85, sz: 16, delay: 240  },
+                { op: 0.55, sz: 12, delay: 360  },
+                { op: 0.35, sz: 9,  delay: 480  },
+              ].map((d, i) => (
+                <WaveDot key={i} delay={d.delay} size={d.sz} opacity={d.op} />
               ))}
             </View>
             <TouchableOpacity style={s.homeBtn} activeOpacity={0.85} onPress={() => changePhase('setup')}>
               <Text style={s.homeBtnTxt}>Jouer →</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={s.homeBtnSecondary} activeOpacity={0.8} onPress={() => changePhase('store')}>
+              <Text style={s.homeBtnSecondaryTxt}>🛍️ Boutique</Text>
+            </TouchableOpacity>
             <View style={s.homeLinks}>
               <TouchableOpacity activeOpacity={0.7} onPress={() => changePhase('rules')}>
                 <Text style={s.homeLinkTxt}>Comment jouer ?</Text>
-              </TouchableOpacity>
-              <Text style={s.homeLinkTxt}> · </Text>
-              <TouchableOpacity activeOpacity={0.7} onPress={() => changePhase('store')}>
-                <Text style={s.homeLinkTxt}>🛍️ Boutique</Text>
               </TouchableOpacity>
             </View>
           </Animated.View>
@@ -692,7 +710,7 @@ export default function HomeScreen() {
               { n: '2', t: "Donner un indice", d: "Un seul mot ou courte phrase pour guider les autres vers la position." },
               { n: '3', t: "Passer le téléphone", d: "Les autres reçoivent le téléphone. Ils ne doivent pas avoir vu le cadran." },
               { n: '4', t: "Deviner ensemble", d: "L'équipe discute et place l'aiguille là où elle pense que la cible se trouve." },
-              { n: '5', t: "Les points", d: "Bullseye (±2.5%) : 5 pts • Proche (±5%) : 3 pts • Autour (±7%) : 1 pt • Raté : 0 pt" },
+              { n: '5', t: "Les points", d: "Bullseye (±7%) : 5 pts • Proche (±14%) : 3 pts • Autour (±21%) : 1 pt • Raté : 0 pt" },
               { n: '★', t: "Bonus Équipe !", d: "En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d'indice." },
             ].map((rule, i) => (
               <View key={i} style={s.ruleRow}>
@@ -875,7 +893,7 @@ export default function HomeScreen() {
                   <View style={[s.optionRow, { marginTop: 12 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={s.optionTitle}>🔥 Mode Expert</Text>
-                      <Text style={s.optionDesc}>Zones resserrées — bullseye ±1%, proche ±2.5%, autour ±4%</Text>
+                      <Text style={s.optionDesc}>Zones resserrées — bullseye ±2.5%, proche ±5%, autour ±7%</Text>
                     </View>
                     <TouchableOpacity activeOpacity={0.8} style={[s.toggle, expertMode && s.toggleOn]} onPress={() => { setExpertMode(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}>
                       <View style={[s.toggleKnob, expertMode && s.toggleKnobOn]} />
@@ -1023,10 +1041,12 @@ const s = StyleSheet.create({
   homeSub:     { fontSize: 16, color: 'rgba(255,255,255,0.72)', textAlign: 'center', marginBottom: 36 },
   waveDots:    { flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 40 },
   waveDot:     { width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.9)' },
-  homeBtn:     { backgroundColor: '#fff', borderRadius: 20, paddingVertical: 18, paddingHorizontal: 52, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 8, marginBottom: 20 },
-  homeBtnTxt:  { color: PALETTE.purple, fontSize: 20, fontWeight: '800' },
-  homeLinks:   { flexDirection: 'row', alignItems: 'center' },
-  homeLinkTxt: { color: 'rgba(255,255,255,0.6)', fontSize: 14, textDecorationLine: 'underline' },
+  homeBtn:            { backgroundColor: '#fff', borderRadius: 20, paddingVertical: 18, paddingHorizontal: 52, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 8, marginBottom: 14 },
+  homeBtnTxt:         { color: PALETTE.purple, fontSize: 20, fontWeight: '800' },
+  homeBtnSecondary:   { borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 16, paddingVertical: 13, paddingHorizontal: 36, marginBottom: 20 },
+  homeBtnSecondaryTxt:{ color: '#fff', fontSize: 15, fontWeight: '700' },
+  homeLinks:          { flexDirection: 'row', alignItems: 'center' },
+  homeLinkTxt:        { color: 'rgba(255,255,255,0.55)', fontSize: 13, textDecorationLine: 'underline' },
 
   // Règles
   rulesContainer: { padding: 28, paddingBottom: 60 },
@@ -1133,9 +1153,11 @@ const s = StyleSheet.create({
   countdownNum: { fontSize: 80, fontWeight: '900', color: PALETTE.teal },
   countdownSub: { fontSize: 14, color: PALETTE.gray400, marginTop: 4 },
 
-  conceptCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: PALETTE.gray100, borderRadius: 18, paddingHorizontal: 20, paddingVertical: 18, marginBottom: 16 },
-  conceptWord: { fontSize: 18, fontWeight: '800', flex: 1, textAlign: 'center' },
-  conceptDiv:  { fontSize: 12, color: PALETTE.gray400, paddingHorizontal: 6 },
+  conceptCard:    { flexDirection: 'row', alignItems: 'center', backgroundColor: PALETTE.gray100, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 16, marginBottom: 16, overflow: 'hidden' },
+  conceptSide:    { flex: 1, alignItems: 'center', gap: 4 },
+  conceptWord:    { fontSize: 17, fontWeight: '800', textAlign: 'center' },
+  conceptArrow:   { fontSize: 14, color: PALETTE.gray400, fontWeight: '700' },
+  conceptDivider: { width: 1, height: 40, backgroundColor: PALETTE.gray200, marginHorizontal: 10 },
 
   hintBox:   { backgroundColor: PALETTE.blueLight, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
   hintTxt:   { fontSize: 13, color: PALETTE.blueDark, textAlign: 'center' },
@@ -1151,9 +1173,9 @@ const s = StyleSheet.create({
   clueBoxLbl: { fontSize: 10, fontWeight: '700', color: PALETTE.teal, letterSpacing: 1.6, marginBottom: 4 },
   clueBoxTxt: { fontSize: 22, fontWeight: '800', color: PALETTE.tealDark },
 
-  dialLbl:  { position: 'absolute', fontSize: 13, fontWeight: '800' },
+  dialLbl:  { position: 'absolute', fontSize: 13, fontWeight: '700', color: PALETTE.gray600 },
   dialLblL: { left: 0 },
-  dialLblR: { right: 0 },
+  dialLblR: { right: 0, textAlign: 'right' },
 
   scoreReveal:  { alignItems: 'center', paddingVertical: 20 },
   scoreNum:     { fontSize: 84, fontWeight: '900', lineHeight: 90 },
