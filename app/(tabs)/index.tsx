@@ -48,6 +48,7 @@ const ZONES_EXPERT = { z5: 1,   z3: 5,  z1: 8  };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
+  'worklet';
   return (1 - pct / 100) * Math.PI;
 }
 function touchToPct(tx: number, ty: number): number {
