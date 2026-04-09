@@ -77,6 +77,7 @@ export const PHASE_BG: Record<string, string> = {
   home:    PALETTE.purple,
   setup:   PALETTE.purple,
   rules:   PALETTE.purpleDark,
+  store:   '#1E1B4B',
   clue:    PALETTE.blue,
   handoff: '#312E81',
   guess:   PALETTE.teal,

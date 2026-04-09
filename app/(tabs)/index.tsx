@@ -11,6 +11,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
+import * as SecureStore from 'expo-secure-store';
 import {
   Dimensions,
   PanResponder,
@@ -24,6 +25,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PALETTE, PHASE_BG, PLAYER_COLORS } from '@/constants/theme';
+import {
+  PACK_ALL_ID, PACK_ALL_PRICE, PACKS,
+  getActiveCards, isUnlocked,
+} from '@/constants/packs';
 
 // ── Dimensions ────────────────────────────────────────────────────────────────
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -43,8 +48,8 @@ const LABEL_H  = 34;
 const DIAL_H   = DIAL_R + PIVOT_R + LABEL_H;
 
 // ── Zones ─────────────────────────────────────────────────────────────────────
-const ZONES_NORMAL = { z5: 2.5, z3: 10, z1: 15 };
-const ZONES_EXPERT = { z5: 1,   z3: 5,  z1: 8  };
+const ZONES_NORMAL = { z5: 2.5, z3: 5,  z1: 7  };
+const ZONES_EXPERT = { z5: 1,   z3: 2.5, z1: 4 };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
@@ -59,7 +64,6 @@ function touchToPct(tx: number, ty: number): number {
   return Math.max(1, Math.min(99, (1 - Math.min(Math.PI, θ) / Math.PI) * 100));
 }
 
-// Couleur d'un secteur
 function secColor(
   i: number, targetPct: number, showTarget: boolean,
   zones: { z5: number; z3: number; z1: number },
@@ -74,18 +78,7 @@ function secColor(
   return DARK;
 }
 
-// ── Cartes ────────────────────────────────────────────────────────────────────
-const CARDS: [string, string][] = [
-  ['Chaud', 'Froid'], ['Rapide', 'Lent'], ['Bon', 'Mauvais'], ['Grand', 'Petit'],
-  ['Fort', 'Faible'], ['Cher', 'Bon marché'], ['Brillant', 'Sombre'], ['Ancien', 'Moderne'],
-  ['Doux', 'Dur'], ['Calme', 'Agité'], ['Simple', 'Complexe'], ['Léger', 'Lourd'],
-  ['Beau', 'Laid'], ['Dangereux', 'Sûr'], ['Populaire', 'Inconnu'], ['Heureux', 'Triste'],
-  ['Propre', 'Sale'], ['Courageux', 'Lâche'], ['Logique', 'Intuitif'], ['Naturel', 'Artificiel'],
-  ['Sérieux', 'Drôle'], ['Public', 'Privé'], ['Urbain', 'Rural'], ['Luxueux', 'Basique'],
-  ['Vif', 'Réfléchi'], ['Bruyant', 'Silencieux'], ['Optimiste', 'Pessimiste'], ['Vieux', 'Jeune'],
-  ['Rapide', 'Économique'], ['Étrange', 'Normal'], ['Célèbre', 'Anonyme'], ['Doux', 'Épicé'],
-];
-
+// ── Étoiles décoratives ───────────────────────────────────────────────────────
 const STARS = [
   { x: DIAL_R * 0.38, y: DIAL_R * 0.18, r: 2.5 },
   { x: DIAL_R * 0.58, y: DIAL_R * 0.08, r: 1.5 },
@@ -129,11 +122,12 @@ function ConfettiPiece({ x, color, duration, delay, size }: {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Phase = 'home' | 'rules' | 'setup' | 'clue' | 'handoff' | 'guess' | 'reveal' | 'end';
+type Phase = 'home' | 'rules' | 'setup' | 'store' | 'clue' | 'handoff' | 'guess' | 'reveal' | 'end';
 type Player      = { name: string; score: number };
 type RoundRecord = { card: [string, string]; clue: string; pts: number; giver: string; bonus: boolean };
 
 const MEDALS = ['🥇', '🥈', '🥉', '🏅', '🏅'];
+const SECURE_KEY = 'longueuronde_purchases';
 
 // ── Composant principal ───────────────────────────────────────────────────────
 export default function HomeScreen() {
@@ -156,22 +150,35 @@ export default function HomeScreen() {
   const [roundHistory, setRoundHistory] = useState<RoundRecord[]>([]);
   const [cardSkipped, setCardSkipped]   = useState(false);
 
-  // Options (setup)
+  // Options
   const [timerEnabled, setTimerEnabled]   = useState(false);
   const [timerDuration, setTimerDuration] = useState(60);
   const [expertMode, setExpertMode]       = useState(false);
+  const [timeLeft, setTimeLeft]           = useState(60);
 
-  // Timer
-  const [timeLeft, setTimeLeft] = useState(60);
+  // Boutique IAP
+  const [purchasedPacks, setPurchasedPacks] = useState<string[]>([]);
+  const [storeConfirm, setStoreConfirm]     = useState<string | null>(null); // packId en cours d'achat
 
-  const guessPosRef = useRef(50);
+  // Refs
+  const guessPosRef   = useRef(50);
+  const dialRef       = useRef<View>(null);
+  const dialOriginRef = useRef({ x: 0, y: 0 });
+  const gameCardsRef  = useRef<[string, string][]>([]);
+
+  // ── Chargement des achats persistés ─────────────────────────────────────────
+  useEffect(() => {
+    SecureStore.getItemAsync(SECURE_KEY).then(val => {
+      if (val) setPurchasedPacks(JSON.parse(val));
+    });
+  }, []);
 
   // ── Animations ──────────────────────────────────────────────────────────────
   const logoScale    = useSharedValue(1);
   const homeOpacity  = useSharedValue(0);
   const scoreScale   = useSharedValue(0);
   const needleShared = useSharedValue(50);
-  const transOpacity = useSharedValue(1);   // transitions de phase
+  const transOpacity = useSharedValue(1);
 
   const logoStyle  = useAnimatedStyle(() => ({ transform: [{ scale: logoScale.value }] }));
   const homeStyle  = useAnimatedStyle(() => ({
@@ -186,15 +193,16 @@ export default function HomeScreen() {
     transform: [{ rotate: `${(needleShared.value / 100 - 0.5) * 180}deg` }],
   }));
   const tipStyle = useAnimatedStyle(() => {
-    const θ = pctToAngle(needleShared.value);
+    const θ      = pctToAngle(needleShared.value);
+    const rotDeg = (needleShared.value / 100 - 0.5) * 180;
     return {
-      left: DIAL_R + NEEDLE_L * Math.cos(θ) - 7,
-      top:  DIAL_R - NEEDLE_L * Math.sin(θ) - 7,
+      left: DIAL_R + NEEDLE_L * Math.cos(θ),
+      top:  DIAL_R - NEEDLE_L * Math.sin(θ),
+      transform: [{ rotate: `${rotDeg}deg` }],
     };
   });
   const transStyle = useAnimatedStyle(() => ({ opacity: transOpacity.value }));
 
-  // Fade-in à l'entrée + animation logo home
   useEffect(() => {
     homeOpacity.value = withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
     logoScale.value   = withRepeat(
@@ -205,7 +213,6 @@ export default function HomeScreen() {
     );
   }, []);
 
-  // Fade-in à chaque changement de phase
   useEffect(() => {
     transOpacity.value = withTiming(1, { duration: 260, easing: Easing.out(Easing.quad) });
   }, [phase]);
@@ -214,20 +221,14 @@ export default function HomeScreen() {
   useEffect(() => {
     setTimeLeft(timerDuration);
     if (phase !== 'clue' || !timerEnabled) return;
-    const id = setInterval(() => {
-      setTimeLeft(t => Math.max(0, t - 1));
-    }, 1000);
+    const id = setInterval(() => setTimeLeft(t => Math.max(0, t - 1)), 1000);
     return () => clearInterval(id);
   }, [phase, timerEnabled, timerDuration]);
 
-  // Haptiques timer
   useEffect(() => {
     if (phase !== 'clue' || !timerEnabled) return;
-    if (timeLeft === 0) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    } else if (timeLeft <= 5) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
+    if (timeLeft === 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    else if (timeLeft <= 5) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, [timeLeft]);
 
   // ── PanResponder ─────────────────────────────────────────────────────────────
@@ -236,13 +237,17 @@ export default function HomeScreen() {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder:  () => true,
       onPanResponderGrant: (e) => {
-        const p = touchToPct(e.nativeEvent.locationX, e.nativeEvent.locationY);
+        const tx = e.nativeEvent.pageX - dialOriginRef.current.x;
+        const ty = e.nativeEvent.pageY - dialOriginRef.current.y;
+        const p = touchToPct(tx, ty);
         needleShared.value = withSpring(p, { damping: 14, stiffness: 260 });
         guessPosRef.current = p;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       },
       onPanResponderMove: (e) => {
-        const p = touchToPct(e.nativeEvent.locationX, e.nativeEvent.locationY);
+        const tx = e.nativeEvent.pageX - dialOriginRef.current.x;
+        const ty = e.nativeEvent.pageY - dialOriginRef.current.y;
+        const p = touchToPct(tx, ty);
         needleShared.value  = p;
         guessPosRef.current = p;
       },
@@ -258,24 +263,35 @@ export default function HomeScreen() {
   const scoreMsgs   = ['Raté ! 😬', 'Proche ! 👍', 'Bien ! 🎯', '', 'Très bien ! ⭐', 'Parfait ! 🎉'];
   const scoreColors = [PALETTE.red, PALETTE.coral, PALETTE.amber, PALETTE.amber, PALETTE.green, PALETTE.green];
 
-  // Transition avec fondu
+  // ── Transitions ───────────────────────────────────────────────────────────────
   const changePhase = (p: Phase) => {
     transOpacity.value = withTiming(0, { duration: 160 }, (done) => {
       if (done) runOnJS(setPhase)(p);
     });
   };
 
-  // Compteur de score animé
+  // ── Score animé ───────────────────────────────────────────────────────────────
   const countUpScore = (target: number) => {
     setDisplayScore(0);
     if (target === 0) return;
     let count = 0;
-    const tick = () => {
-      count++;
-      setDisplayScore(count);
-      if (count < target) setTimeout(tick, 140);
-    };
+    const tick = () => { count++; setDisplayScore(count); if (count < target) setTimeout(tick, 140); };
     setTimeout(tick, 280);
+  };
+
+  // ── IAP (simulation) ──────────────────────────────────────────────────────────
+  const confirmPurchase = async (packId: string) => {
+    // En production : appeler react-native-iap ou expo-iap ici
+    let next: string[];
+    if (packId === PACK_ALL_ID) {
+      next = [PACK_ALL_ID];
+    } else {
+      next = [...purchasedPacks.filter(id => id !== PACK_ALL_ID), packId];
+    }
+    setPurchasedPacks(next);
+    await SecureStore.setItemAsync(SECURE_KEY, JSON.stringify(next));
+    setStoreConfirm(null);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
   // ── Actions ───────────────────────────────────────────────────────────────────
@@ -285,24 +301,27 @@ export default function HomeScreen() {
     setPlayers(p => p.map((pl, idx) => idx === i ? { ...pl, name } : pl));
 
   const startGame = () => {
+    gameCardsRef.current = getActiveCards(purchasedPacks);
     const reset = players.map(p => ({ ...p, score: 0 }));
     setPlayers(reset); setCurrentGiver(0); setUsedCards([]); setRoundHistory([]);
     nextRound(reset, 0, 0, []);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
-  const pickUnusedCard = (used: number[]): number => {
-    let idx = Math.floor(Math.random() * CARDS.length);
+  const pickCard = (used: number[]): number => {
+    const pool = gameCardsRef.current;
+    let idx = Math.floor(Math.random() * pool.length);
     let tries = 0;
-    while (used.includes(idx) && tries < CARDS.length) { idx = (idx + 1) % CARDS.length; tries++; }
+    while (used.includes(idx) && tries < pool.length) { idx = (idx + 1) % pool.length; tries++; }
     return idx;
   };
 
   const nextRound = (pl: Player[], round: number, giver: number, used: number[]) => {
     const nr = round + 1;
     if (nr > totalRounds) { changePhase('end'); return; }
-    const idx = pickUnusedCard(used);
-    setCurrentRound(nr); setCurrentCard(CARDS[idx]);
+    const idx = pickCard(used);
+    setCurrentRound(nr);
+    setCurrentCard(gameCardsRef.current[idx]);
     setTargetPos(10 + Math.floor(Math.random() * 80));
     needleShared.value = withSpring(50, { damping: 12, stiffness: 150 });
     guessPosRef.current = 50;
@@ -313,8 +332,8 @@ export default function HomeScreen() {
 
   const skipCard = () => {
     if (cardSkipped) return;
-    const newIdx = pickUnusedCard([...usedCards]);
-    setCurrentCard(CARDS[newIdx]);
+    const newIdx = pickCard([...usedCards]);
+    setCurrentCard(gameCardsRef.current[newIdx]);
     setUsedCards(u => [...u, newIdx]);
     setCardSkipped(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -335,17 +354,13 @@ export default function HomeScreen() {
 
     const bonus = pts === 5;
     setTeamBonus(bonus);
-
     setPlayers(p => p.map((pl, i) => {
       if (i !== currentGiver) return { ...pl, score: pl.score + pts + (bonus ? 1 : 0) };
       return bonus ? { ...pl, score: pl.score + 1 } : pl;
     }));
     setRoundPoints(pts);
     countUpScore(pts);
-    setRoundHistory(h => [...h, {
-      card: currentCard, clue, pts, bonus,
-      giver: players[currentGiver].name,
-    }]);
+    setRoundHistory(h => [...h, { card: currentCard, clue, pts, bonus, giver: players[currentGiver].name }]);
 
     scoreScale.value = withSequence(
       withTiming(0, { duration: 0 }),
@@ -379,6 +394,12 @@ export default function HomeScreen() {
     showTarget = false, showCursor = false, interactive = false,
   }: { showTarget?: boolean; showCursor?: boolean; interactive?: boolean }) => (
     <View
+      ref={interactive ? dialRef : undefined}
+      onLayout={interactive ? () => {
+        dialRef.current?.measure((_x, _y, _w, _h, pageX, pageY) => {
+          dialOriginRef.current = { x: pageX, y: pageY };
+        });
+      } : undefined}
       style={{ width: DIAL_W, height: DIAL_H, alignSelf: 'center', marginBottom: 12 }}
       {...(interactive ? pan.panHandlers : {})}
     >
@@ -388,7 +409,6 @@ export default function HomeScreen() {
         borderTopLeftRadius: DIAL_R, borderTopRightRadius: DIAL_R,
         backgroundColor: '#14243A', overflow: 'hidden',
       }}>
-        {/* Secteurs */}
         {Array.from({ length: N_SEC }, (_, i) => (
           <View key={i} style={{
             position: 'absolute',
@@ -400,16 +420,12 @@ export default function HomeScreen() {
             transform: [{ rotate: `${-180 + (i + 0.5) * SEC_DEG}deg` }],
           }} />
         ))}
-
-        {/* Hub central sombre */}
         <View style={{
           position: 'absolute',
           left: DIAL_R - INNER_R, top: DIAL_R - INNER_R,
           width: INNER_R * 2, height: INNER_R * 2, borderRadius: INNER_R,
           backgroundColor: '#14243A',
         }} />
-
-        {/* Étoiles */}
         {STARS.map((star, i) => (
           <View key={`s${i}`} style={{
             position: 'absolute',
@@ -418,31 +434,25 @@ export default function HomeScreen() {
             backgroundColor: 'rgba(255,255,255,0.85)',
           }} />
         ))}
-
-        {/* Aiguille animée */}
         {showCursor && (
           <Animated.View style={[{
             position: 'absolute',
             left: DIAL_R - NEEDLE_W / 2, top: DIAL_R - NEEDLE_L,
             width: NEEDLE_W, height: NEEDLE_L,
-            backgroundColor: '#E2E8F0',
-            borderRadius: NEEDLE_W / 2,
+            backgroundColor: '#E2E8F0', borderRadius: NEEDLE_W / 2,
             // @ts-ignore
             transformOrigin: 'bottom',
           }, needleRotStyle]} />
         )}
-
-        {/* Bout de l'aiguille */}
         {showCursor && (
           <Animated.View style={[{
             position: 'absolute',
-            width: 14, height: 14, borderRadius: 7,
-            backgroundColor: '#fff',
-            borderWidth: 2, borderColor: '#94A3B8',
+            width: 0, height: 0,
+            borderLeftWidth: 7, borderRightWidth: 7, borderBottomWidth: 13,
+            borderLeftColor: 'transparent', borderRightColor: 'transparent',
+            borderBottomColor: '#fff',
           }, tipStyle]} />
         )}
-
-        {/* Pivot rouge */}
         <View style={{
           position: 'absolute',
           left: DIAL_R - PIVOT_R, top: DIAL_R - PIVOT_R,
@@ -450,8 +460,6 @@ export default function HomeScreen() {
           backgroundColor: '#EF4444', borderWidth: 2, borderColor: '#fff',
         }} />
       </View>
-
-      {/* Étiquettes */}
       <Text style={[s.dialLbl, s.dialLblL, { top: DIAL_R + PIVOT_R + 6, color: PALETTE.blue }]}>
         {currentCard[0]}
       </Text>
@@ -495,14 +503,16 @@ export default function HomeScreen() {
     );
   });
 
-  // ── Timer helpers ─────────────────────────────────────────────────────────────
-  const timerColor = timeLeft <= 5 ? PALETTE.red : timeLeft <= 15 ? PALETTE.amber : PALETTE.green;
+  const timerColor  = timeLeft <= 5 ? PALETTE.red : timeLeft <= 15 ? PALETTE.amber : PALETTE.green;
   const timerUrgent = timerEnabled && phase === 'clue' && timeLeft <= 10;
+  const bg          = PHASE_BG[phase] ?? PALETTE.purple;
+  const showProgress = ['clue','handoff','guess','reveal'].includes(phase);
+
+  // Packs actifs
+  const unlockedPacks = PACKS.filter(p => isUnlocked(p.id, purchasedPacks));
+  const totalCards = unlockedPacks.reduce((n, p) => n + p.cards.length, 0);
 
   // ── Render ────────────────────────────────────────────────────────────────────
-  const bg = PHASE_BG[phase] ?? PALETTE.purple;
-  const showProgress = phase === 'clue' || phase === 'handoff' || phase === 'guess' || phase === 'reveal';
-
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: bg }]}>
       <StatusBar barStyle="light-content" backgroundColor={bg} />
@@ -523,9 +533,15 @@ export default function HomeScreen() {
             <TouchableOpacity style={s.homeBtn} onPress={() => changePhase('setup')}>
               <Text style={s.homeBtnTxt}>Jouer →</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => changePhase('rules')}>
-              <Text style={s.homeLinkTxt}>Comment jouer ?</Text>
-            </TouchableOpacity>
+            <View style={s.homeLinks}>
+              <TouchableOpacity onPress={() => changePhase('rules')}>
+                <Text style={s.homeLinkTxt}>Comment jouer ?</Text>
+              </TouchableOpacity>
+              <Text style={s.homeLinkTxt}> · </Text>
+              <TouchableOpacity onPress={() => changePhase('store')}>
+                <Text style={s.homeLinkTxt}>🛍️ Boutique</Text>
+              </TouchableOpacity>
+            </View>
           </Animated.View>
         )}
 
@@ -534,14 +550,13 @@ export default function HomeScreen() {
           <ScrollView contentContainerStyle={s.rulesContainer}>
             <Text style={s.rulesEmoji}>📖</Text>
             <Text style={s.rulesTitle}>Comment jouer</Text>
-
             {[
-              { n: '1', t: 'Le faiseur d\'indice', d: 'Un joueur voit où la cible se trouve sur le cadran (zone rouge). Les autres ne voient pas.' },
-              { n: '2', t: 'Donner un indice', d: 'Le faiseur d\'indice donne un seul mot ou courte phrase pour guider les autres vers la position.' },
-              { n: '3', t: 'Passer le téléphone', d: 'Les autres joueurs reçoivent le téléphone. Ils ne doivent pas voir le cadran avant.' },
-              { n: '4', t: 'Deviner ensemble', d: 'L\'équipe discute et place l\'aiguille là où elle pense que la cible se trouve.' },
-              { n: '5', t: 'Les points', d: 'Bullseye (±2.5%) : 5 pts • Proche (±10%) : 3 pts • Autour (±15%) : 1 pt • Raté : 0 pt' },
-              { n: '★', t: 'Bonus Équipe !', d: 'En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d\'indice.' },
+              { n: '1', t: "Le faiseur d'indice", d: "Un joueur voit où la cible se trouve sur le cadran (zone rouge). Les autres ne voient pas." },
+              { n: '2', t: "Donner un indice", d: "Le faiseur d'indice donne un seul mot ou courte phrase pour guider les autres vers la position." },
+              { n: '3', t: "Passer le téléphone", d: "Les autres joueurs reçoivent le téléphone. Ils ne doivent pas voir le cadran avant." },
+              { n: '4', t: "Deviner ensemble", d: "L'équipe discute et place l'aiguille là où elle pense que la cible se trouve." },
+              { n: '5', t: "Les points", d: "Bullseye (±2.5%) : 5 pts • Proche (±5%) : 3 pts • Autour (±7%) : 1 pt • Raté : 0 pt" },
+              { n: '★', t: "Bonus Équipe !", d: "En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d'indice." },
             ].map((rule, i) => (
               <View key={i} style={s.ruleRow}>
                 <View style={s.ruleNum}><Text style={s.ruleNumTxt}>{rule.n}</Text></View>
@@ -551,20 +566,109 @@ export default function HomeScreen() {
                 </View>
               </View>
             ))}
-
             <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 32 }]} onPress={() => changePhase('home')}>
               <Text style={s.bigBtnTxt}>Retour à l'accueil</Text>
             </TouchableOpacity>
           </ScrollView>
         )}
 
+        {/* ═══ BOUTIQUE ═══ */}
+        {phase === 'store' && (
+          <ScrollView contentContainerStyle={s.storeContainer}>
+            <Text style={s.storeTitle}>🛍️ Boutique</Text>
+            <Text style={s.storeSub}>Enrichis ton jeu avec des packs thématiques</Text>
+
+            {PACKS.map(pack => {
+              const owned = isUnlocked(pack.id, purchasedPacks);
+              return (
+                <View key={pack.id} style={[s.packCard, owned && s.packCardOwned]}>
+                  <View style={s.packLeft}>
+                    <Text style={s.packEmoji}>{pack.emoji}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.packName}>{pack.name}</Text>
+                      <Text style={s.packTagline}>{pack.tagline}</Text>
+                      <Text style={s.packCount}>{pack.cards.length} cartes</Text>
+                    </View>
+                  </View>
+                  <View style={s.packRight}>
+                    {owned ? (
+                      <View style={s.packOwnedBadge}>
+                        <Text style={s.packOwnedTxt}>✓ Inclus</Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={s.packBuyBtn}
+                        onPress={() => { setStoreConfirm(pack.id); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                      >
+                        <Text style={s.packBuyTxt}>{pack.price?.toFixed(2)} €</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+
+            {/* Pack Complet */}
+            {!purchasedPacks.includes(PACK_ALL_ID) && (
+              <TouchableOpacity
+                style={s.packAllCard}
+                onPress={() => { setStoreConfirm(PACK_ALL_ID); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
+              >
+                <Text style={s.packAllEmoji}>✨</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.packAllName}>Pack Complet</Text>
+                  <Text style={s.packAllSub}>Tous les packs • économise 1 €</Text>
+                </View>
+                <Text style={s.packAllPrice}>{PACK_ALL_PRICE.toFixed(2)} €</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity style={[s.bigBtn, { backgroundColor: 'rgba(255,255,255,0.15)', marginTop: 24 }]} onPress={() => changePhase('home')}>
+              <Text style={s.bigBtnTxt}>← Retour</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )}
+
+        {/* ═══ MODAL CONFIRMATION ACHAT ═══ */}
+        {storeConfirm !== null && (
+          <View style={s.confirmOverlay}>
+            <View style={s.confirmBox}>
+              {(() => {
+                const isAll = storeConfirm === PACK_ALL_ID;
+                const pack  = PACKS.find(p => p.id === storeConfirm);
+                const name  = isAll ? 'Pack Complet ✨' : `${pack?.emoji} ${pack?.name}`;
+                const price = isAll ? PACK_ALL_PRICE : pack?.price;
+                return (
+                  <>
+                    <Text style={s.confirmTitle}>{name}</Text>
+                    <Text style={s.confirmPrice}>{price?.toFixed(2)} €</Text>
+                    <Text style={s.confirmNote}>
+                      💡 Mode simulation — dans la version finale,{'\n'}le paiement se fera via le store.
+                    </Text>
+                    <TouchableOpacity
+                      style={[s.bigBtn, { backgroundColor: PALETTE.purple, width: '100%', marginTop: 16 }]}
+                      onPress={() => confirmPurchase(storeConfirm)}
+                    >
+                      <Text style={s.bigBtnTxt}>Confirmer l'achat →</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={s.confirmCancel} onPress={() => setStoreConfirm(null)}>
+                      <Text style={s.confirmCancelTxt}>Annuler</Text>
+                    </TouchableOpacity>
+                  </>
+                );
+              })()}
+            </View>
+          </View>
+        )}
+
         {/* ═══ JEU ═══ */}
-        {phase !== 'home' && phase !== 'rules' && (
+        {!['home','rules','store'].includes(phase) && (
           <>
-            {/* En-tête */}
             <View style={[s.header, { backgroundColor: bg }]}>
-              {phase === 'setup'   && <><Text style={s.hTitle}>Configuration</Text><Text style={s.hSub}>Qui joue ? Combien de manches ?</Text></>}
-              {phase === 'clue'    && (
+              {phase === 'setup' && (
+                <><Text style={s.hTitle}>Configuration</Text><Text style={s.hSub}>Qui joue ? Combien de manches ?</Text></>
+              )}
+              {phase === 'clue' && (
                 <>
                   <View style={s.hRow}>
                     <Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text>
@@ -585,9 +689,13 @@ export default function HomeScreen() {
               {showProgress && renderProgress()}
             </View>
 
-            {/* Feuille blanche */}
             <View style={s.sheet}>
-              <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                contentContainerStyle={s.content}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                scrollEnabled={phase !== 'guess'}
+              >
 
                 {/* SETUP */}
                 {phase === 'setup' && <>
@@ -616,19 +724,37 @@ export default function HomeScreen() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Options avancées */}
-                  <Text style={[s.label, { marginTop: 28 }]}>OPTIONS</Text>
+                  {/* Packs actifs */}
+                  <View style={s.packsSection}>
+                    <View style={s.packsSectionHeader}>
+                      <Text style={s.label}>PACKS DE CARTES</Text>
+                      <TouchableOpacity onPress={() => changePhase('store')}>
+                        <Text style={s.packsSeeAll}>Gérer →</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+                      {unlockedPacks.map(pack => (
+                        <View key={pack.id} style={s.packPill}>
+                          <Text style={s.packPillTxt}>{pack.emoji} {pack.name}</Text>
+                        </View>
+                      ))}
+                      {unlockedPacks.length < PACKS.length && (
+                        <TouchableOpacity style={[s.packPill, s.packPillLocked]} onPress={() => changePhase('store')}>
+                          <Text style={[s.packPillTxt, { color: PALETTE.purple }]}>+ Débloquer</Text>
+                        </TouchableOpacity>
+                      )}
+                    </ScrollView>
+                    <Text style={s.packsTotalTxt}>{totalCards} cartes disponibles</Text>
+                  </View>
 
-                  {/* Timer */}
+                  {/* Options */}
+                  <Text style={[s.label, { marginTop: 20 }]}>OPTIONS</Text>
                   <View style={s.optionRow}>
                     <View style={{ flex: 1 }}>
                       <Text style={s.optionTitle}>⏱ Chrono par manche</Text>
                       <Text style={s.optionDesc}>Limite de temps pour donner l'indice</Text>
                     </View>
-                    <TouchableOpacity
-                      style={[s.toggle, timerEnabled && s.toggleOn]}
-                      onPress={() => { setTimerEnabled(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
-                    >
+                    <TouchableOpacity style={[s.toggle, timerEnabled && s.toggleOn]} onPress={() => { setTimerEnabled(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}>
                       <View style={[s.toggleKnob, timerEnabled && s.toggleKnobOn]} />
                     </TouchableOpacity>
                   </View>
@@ -643,17 +769,12 @@ export default function HomeScreen() {
                       </TouchableOpacity>
                     </View>
                   )}
-
-                  {/* Mode expert */}
                   <View style={[s.optionRow, { marginTop: 12 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={s.optionTitle}>🔥 Mode Expert</Text>
-                      <Text style={s.optionDesc}>Zones plus petites — bullseye ±1%, proche ±5%, autour ±8%</Text>
+                      <Text style={s.optionDesc}>Zones plus petites — bullseye ±1%, proche ±2.5%, autour ±4%</Text>
                     </View>
-                    <TouchableOpacity
-                      style={[s.toggle, expertMode && s.toggleOn]}
-                      onPress={() => { setExpertMode(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
-                    >
+                    <TouchableOpacity style={[s.toggle, expertMode && s.toggleOn]} onPress={() => { setExpertMode(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}>
                       <View style={[s.toggleKnob, expertMode && s.toggleKnobOn]} />
                     </TouchableOpacity>
                   </View>
@@ -723,9 +844,7 @@ export default function HomeScreen() {
                     <Text style={[s.scoreNum, { color: scoreColors[roundPoints] }]}>+{displayScore}</Text>
                     <Text style={s.scoreMsg}>{scoreMsgs[roundPoints]}</Text>
                     {teamBonus && (
-                      <View style={s.bonusBadge}>
-                        <Text style={s.bonusTxt}>🎯 BONUS ÉQUIPE  +1</Text>
-                      </View>
+                      <View style={s.bonusBadge}><Text style={s.bonusTxt}>🎯 BONUS ÉQUIPE +1</Text></View>
                     )}
                     {expertMode && (
                       <View style={[s.bonusBadge, { backgroundColor: PALETTE.amberLight, marginTop: 6 }]}>
@@ -744,7 +863,6 @@ export default function HomeScreen() {
                 {phase === 'end' && <>
                   <Text style={s.label}>CLASSEMENT FINAL</Text>
                   {renderScores(' pts')}
-
                   <Text style={[s.label, { marginTop: 28 }]}>RÉCAP DES MANCHES</Text>
                   {roundHistory.map((r, i) => (
                     <View key={i} style={s.historyRow}>
@@ -762,7 +880,6 @@ export default function HomeScreen() {
                       </View>
                     </View>
                   ))}
-
                   <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 32 }]} onPress={restart}>
                     <Text style={s.bigBtnTxt}>Rejouer 🎮</Text>
                   </TouchableOpacity>
@@ -771,7 +888,6 @@ export default function HomeScreen() {
               </ScrollView>
             </View>
 
-            {/* Confettis */}
             {phase === 'end' && (
               <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
                 {CONFETTI_DATA.map((c, i) => <ConfettiPiece key={i} {...c} />)}
@@ -798,6 +914,7 @@ const s = StyleSheet.create({
   waveDot:    { width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.9)' },
   homeBtn:    { backgroundColor: '#fff', borderRadius: 20, paddingVertical: 18, paddingHorizontal: 52, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 8, marginBottom: 20 },
   homeBtnTxt: { color: PALETTE.purple, fontSize: 20, fontWeight: '800' },
+  homeLinks:  { flexDirection: 'row', alignItems: 'center' },
   homeLinkTxt:{ color: 'rgba(255,255,255,0.6)', fontSize: 14, textDecorationLine: 'underline' },
 
   // Règles
@@ -810,6 +927,37 @@ const s = StyleSheet.create({
   ruleTitle:      { fontSize: 15, fontWeight: '700', color: '#fff', marginBottom: 3 },
   ruleDesc:       { fontSize: 13, color: 'rgba(255,255,255,0.75)', lineHeight: 18 },
 
+  // Boutique
+  storeContainer: { padding: 24, paddingBottom: 60 },
+  storeTitle:     { fontSize: 28, fontWeight: '900', color: '#fff', textAlign: 'center', marginBottom: 6 },
+  storeSub:       { fontSize: 14, color: 'rgba(255,255,255,0.65)', textAlign: 'center', marginBottom: 28 },
+  packCard:       { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 18, padding: 16, marginBottom: 12 },
+  packCardOwned:  { backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  packLeft:       { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  packEmoji:      { fontSize: 32 },
+  packName:       { fontSize: 15, fontWeight: '800', color: '#fff', marginBottom: 2 },
+  packTagline:    { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 3 },
+  packCount:      { fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
+  packRight:      { alignItems: 'flex-end', marginLeft: 8 },
+  packOwnedBadge: { backgroundColor: PALETTE.green, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5 },
+  packOwnedTxt:   { color: '#fff', fontSize: 12, fontWeight: '800' },
+  packBuyBtn:     { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 },
+  packBuyTxt:     { color: '#1E1B4B', fontSize: 14, fontWeight: '800' },
+  packAllCard:    { flexDirection: 'row', alignItems: 'center', backgroundColor: PALETTE.purple, borderRadius: 18, padding: 18, marginTop: 8, gap: 12, borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)' },
+  packAllEmoji:   { fontSize: 36 },
+  packAllName:    { fontSize: 16, fontWeight: '900', color: '#fff' },
+  packAllSub:     { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  packAllPrice:   { fontSize: 18, fontWeight: '900', color: '#fff' },
+
+  // Modal confirmation achat
+  confirmOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end', zIndex: 100 },
+  confirmBox:     { backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 28, alignItems: 'center' },
+  confirmTitle:   { fontSize: 22, fontWeight: '900', color: PALETTE.dark, marginBottom: 6 },
+  confirmPrice:   { fontSize: 36, fontWeight: '900', color: PALETTE.purple, marginBottom: 12 },
+  confirmNote:    { fontSize: 12, color: PALETTE.gray400, textAlign: 'center', lineHeight: 18, marginBottom: 4 },
+  confirmCancel:  { paddingVertical: 14 },
+  confirmCancelTxt:{ color: PALETTE.gray400, fontSize: 14 },
+
   // Header
   header:  { paddingHorizontal: 24, paddingTop: 14, paddingBottom: 16, alignItems: 'center' },
   hEmoji:  { fontSize: 44, marginBottom: 4 },
@@ -818,17 +966,14 @@ const s = StyleSheet.create({
   hTitle:  { fontSize: 24, fontWeight: '800', color: '#fff', textAlign: 'center', marginBottom: 4 },
   hSub:    { fontSize: 13, color: 'rgba(255,255,255,0.7)', textAlign: 'center' },
 
-  // Timer badge
   timerBadge: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3 },
   timerTxt:   { color: '#fff', fontSize: 13, fontWeight: '800' },
 
-  // Barre de progression
   progressWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
   progressTrack: { flex: 1, height: 4, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 2, overflow: 'hidden' },
   progressFill:  { height: 4, backgroundColor: '#fff', borderRadius: 2 },
   progressTxt:   { fontSize: 11, color: 'rgba(255,255,255,0.65)', fontWeight: '600', width: 36, textAlign: 'right' },
 
-  // Feuille
   sheet:   { flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden' },
   content: { padding: 24, paddingBottom: 64 },
   label:   { fontSize: 11, fontWeight: '700', color: PALETTE.gray400, letterSpacing: 1.6, marginBottom: 12 },
@@ -843,16 +988,24 @@ const s = StyleSheet.create({
   addBtn:      { borderWidth: 1.5, borderColor: PALETTE.gray200, borderStyle: 'dashed', borderRadius: 12, padding: 13, alignItems: 'center', marginTop: 2 },
   addTxt:      { color: PALETTE.gray600, fontSize: 14, fontWeight: '500' },
 
-  // Options (timer, expert)
-  optionRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6 },
-  optionTitle: { fontSize: 14, fontWeight: '700', color: PALETTE.dark, marginBottom: 2 },
-  optionDesc:  { fontSize: 12, color: PALETTE.gray400, lineHeight: 16 },
-  toggle:      { width: 48, height: 28, borderRadius: 14, backgroundColor: PALETTE.gray200, justifyContent: 'center', paddingHorizontal: 3 },
-  toggleOn:    { backgroundColor: PALETTE.purple },
-  toggleKnob:  { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 },
+  // Packs dans setup
+  packsSection:       { marginTop: 28 },
+  packsSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  packsSeeAll:        { fontSize: 13, color: PALETTE.purple, fontWeight: '700' },
+  packPill:           { backgroundColor: PALETTE.purpleLight, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8 },
+  packPillLocked:     { backgroundColor: '#fff', borderWidth: 1.5, borderColor: PALETTE.purple },
+  packPillTxt:        { fontSize: 13, fontWeight: '700', color: PALETTE.purpleDark },
+  packsTotalTxt:      { fontSize: 12, color: PALETTE.gray400, marginTop: 8 },
+
+  // Options
+  optionRow:    { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6 },
+  optionTitle:  { fontSize: 14, fontWeight: '700', color: PALETTE.dark, marginBottom: 2 },
+  optionDesc:   { fontSize: 12, color: PALETTE.gray400, lineHeight: 16 },
+  toggle:       { width: 48, height: 28, borderRadius: 14, backgroundColor: PALETTE.gray200, justifyContent: 'center', paddingHorizontal: 3 },
+  toggleOn:     { backgroundColor: PALETTE.purple },
+  toggleKnob:   { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 },
   toggleKnobOn: { alignSelf: 'flex-end' },
 
-  // Compteur manches
   counter:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   counterBtn:    { width: 52, height: 52, borderRadius: 26, backgroundColor: PALETTE.gray100, alignItems: 'center', justifyContent: 'center' },
   counterBtnSm:  { width: 40, height: 40, borderRadius: 20, backgroundColor: PALETTE.gray100, alignItems: 'center', justifyContent: 'center' },
@@ -860,49 +1013,40 @@ const s = StyleSheet.create({
   counterVal:    { fontSize: 48, fontWeight: '800', color: PALETTE.dark, width: 90, textAlign: 'center' },
   counterValSm:  { fontSize: 28, fontWeight: '700', color: PALETTE.dark, width: 70, textAlign: 'center' },
 
-  // Bouton
   bigBtn:    { borderRadius: 16, padding: 17, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5 },
   bigBtnTxt: { color: '#fff', fontSize: 16, fontWeight: '800' },
 
-  // Skip
   skipBtn: { alignItems: 'center', paddingVertical: 14, marginTop: 6 },
   skipTxt: { color: PALETTE.gray400, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
 
-  // Concept
   conceptCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: PALETTE.gray100, borderRadius: 18, paddingHorizontal: 20, paddingVertical: 18, marginBottom: 16 },
   conceptWord: { fontSize: 18, fontWeight: '800', flex: 1, textAlign: 'center' },
   conceptDiv:  { fontSize: 12, color: PALETTE.gray400, paddingHorizontal: 6 },
 
-  // Indice
   hintBox:  { backgroundColor: PALETTE.blueLight, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
   hintTxt:  { fontSize: 13, color: PALETTE.blueDark, textAlign: 'center' },
   hintBold: { fontWeight: '800' },
   clueInput:{ backgroundColor: PALETTE.gray100, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 17, color: PALETTE.dark, marginBottom: 16 },
 
-  // Handoff
   handoffBox:   { alignItems: 'center', paddingVertical: 28 },
   handoffEmoji: { fontSize: 56, marginBottom: 14 },
   handoffTitle: { fontSize: 18, fontWeight: '700', color: PALETTE.dark, textAlign: 'center', marginBottom: 8 },
   handoffSub:   { fontSize: 13, color: PALETTE.gray400, textAlign: 'center' },
 
-  // Indice affiché
   clueBox:    { backgroundColor: PALETTE.tealLight, borderRadius: 14, padding: 14, marginBottom: 16, alignItems: 'center' },
   clueBoxLbl: { fontSize: 10, fontWeight: '700', color: PALETTE.teal, letterSpacing: 1.6, marginBottom: 4 },
   clueBoxTxt: { fontSize: 22, fontWeight: '800', color: PALETTE.tealDark },
 
-  // Cadran
   dialLbl:  { position: 'absolute', fontSize: 13, fontWeight: '800' },
   dialLblL: { left: 0 },
   dialLblR: { right: 0 },
 
-  // Score
   scoreReveal: { alignItems: 'center', paddingVertical: 20 },
   scoreNum:    { fontSize: 84, fontWeight: '900', lineHeight: 90 },
   scoreMsg:    { fontSize: 18, color: PALETTE.gray600, marginTop: 4, fontWeight: '600' },
   bonusBadge:  { marginTop: 12, backgroundColor: PALETTE.purpleLight, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 7 },
   bonusTxt:    { fontSize: 14, fontWeight: '700', color: PALETTE.purple },
 
-  // Tableau scores
   scoreRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: PALETTE.gray100 },
   scoreRowFirst:   { backgroundColor: PALETTE.purpleLight, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 0, marginBottom: 6 },
   scoreLeft:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -914,7 +1058,6 @@ const s = StyleSheet.create({
   scoreRowPts:     { fontSize: 20, fontWeight: '700', color: PALETTE.dark },
   scoreRowPtsBig:  { fontSize: 24, color: PALETTE.purple },
 
-  // Historique manches
   historyRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: PALETTE.gray100 },
   historyLeft:  { flexDirection: 'row', gap: 10, alignItems: 'center', flex: 1 },
   historyNum:   { width: 22, height: 22, borderRadius: 11, backgroundColor: PALETTE.gray100, textAlign: 'center', fontSize: 11, fontWeight: '700', color: PALETTE.gray600, lineHeight: 22 },
