@@ -1,85 +1,134 @@
 import React, { useRef, useState } from 'react';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+} from 'react-native-reanimated';
 import {
   Dimensions,
   PanResponder,
   SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { PALETTE, PHASE_BG, PLAYER_COLORS } from '@/constants/theme';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SPECTRUM_WIDTH = SCREEN_WIDTH - 48;
 const ZONE_PCT = 20;
+const SEG = 20;
 
-const CARDS = [
+// Génère un dégradé bleu → blanc → rouge sur N segments
+function spectrumColor(i: number): string {
+  const t = i / (SEG - 1);
+  if (t <= 0.5) {
+    const s = t * 2;
+    return `rgb(${Math.round(37 + s * 218)},${Math.round(99 + s * 156)},${Math.round(235 - s * 235)})`;
+  }
+  const s = (t - 0.5) * 2;
+  return `rgb(255,${Math.round(255 - s * 255)},${Math.round(255 - s * 255)})`;
+}
+
+const SPECTRUM_COLORS = Array.from({ length: SEG }, (_, i) => spectrumColor(i));
+
+const CARDS: [string, string][] = [
   ['Chaud', 'Froid'], ['Rapide', 'Lent'], ['Bon', 'Mauvais'], ['Grand', 'Petit'],
   ['Fort', 'Faible'], ['Cher', 'Bon marché'], ['Brillant', 'Sombre'], ['Ancien', 'Moderne'],
   ['Doux', 'Dur'], ['Calme', 'Agité'], ['Simple', 'Complexe'], ['Léger', 'Lourd'],
   ['Beau', 'Laid'], ['Dangereux', 'Sûr'], ['Populaire', 'Inconnu'], ['Heureux', 'Triste'],
   ['Propre', 'Sale'], ['Courageux', 'Lâche'], ['Logique', 'Intuitif'], ['Naturel', 'Artificiel'],
   ['Sérieux', 'Drôle'], ['Public', 'Privé'], ['Urbain', 'Rural'], ['Luxueux', 'Basique'],
-  ['Rapide', 'Réfléchi'], ['Bruyant', 'Silencieux'], ['Optimiste', 'Pessimiste'], ['Vieux', 'Jeune'],
+  ['Vif', 'Réfléchi'], ['Bruyant', 'Silencieux'], ['Optimiste', 'Pessimiste'], ['Vieux', 'Jeune'],
 ];
 
 type Phase = 'setup' | 'clue' | 'guess' | 'reveal' | 'end';
 type Player = { name: string; score: number };
 
 export default function HomeScreen() {
-  const [phase, setPhase] = useState<Phase>('setup');
-  const [players, setPlayers] = useState<Player[]>([
+  const [phase, setPhase]               = useState<Phase>('setup');
+  const [players, setPlayers]           = useState<Player[]>([
     { name: 'Joueur 1', score: 0 },
     { name: 'Joueur 2', score: 0 },
   ]);
-  const [totalRounds, setTotalRounds] = useState(8);
+  const [totalRounds, setTotalRounds]   = useState(8);
   const [currentRound, setCurrentRound] = useState(0);
   const [currentGiver, setCurrentGiver] = useState(0);
-  const [currentCard, setCurrentCard] = useState<string[]>(['', '']);
-  const [targetPos, setTargetPos] = useState(50);
-  const [guessPos, setGuessPos] = useState(50);
-  const [clue, setClue] = useState('');
-  const [roundPoints, setRoundPoints] = useState(0);
-  const [usedCards, setUsedCards] = useState<number[]>([]);
+  const [currentCard, setCurrentCard]   = useState<[string, string]>(['', '']);
+  const [targetPos, setTargetPos]       = useState(50);
+  const [guessPos, setGuessPos]         = useState(50);
+  const [clue, setClue]                 = useState('');
+  const [roundPoints, setRoundPoints]   = useState(0);
+  const [usedCards, setUsedCards]       = useState<number[]>([]);
   const guessPosRef = useRef(50);
 
-  const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (e) => {
-      const x = e.nativeEvent.locationX;
-      const pct = Math.max(2, Math.min(98, (x / SPECTRUM_WIDTH) * 100));
-      guessPosRef.current = pct;
-      setGuessPos(pct);
-    },
-    onPanResponderMove: (e) => {
-      const x = e.nativeEvent.locationX;
-      const pct = Math.max(2, Math.min(98, (x / SPECTRUM_WIDTH) * 100));
-      guessPosRef.current = pct;
-      setGuessPos(pct);
-    },
-  });
+  // Animation score
+  const scoreScale = useSharedValue(0);
+  const scoreAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scoreScale.value }],
+    opacity: scoreScale.value,
+  }));
+
+  // PanResponder stable
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder:  () => true,
+      onPanResponderGrant: (e) => {
+        const pct = Math.max(2, Math.min(98, (e.nativeEvent.locationX / SPECTRUM_WIDTH) * 100));
+        guessPosRef.current = pct;
+        setGuessPos(pct);
+      },
+      onPanResponderMove: (e) => {
+        const pct = Math.max(2, Math.min(98, (e.nativeEvent.locationX / SPECTRUM_WIDTH) * 100));
+        guessPosRef.current = pct;
+        setGuessPos(pct);
+      },
+    })
+  ).current;
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  const initials = (name: string) => name.trim().charAt(0).toUpperCase();
+
+  const getHint = () => {
+    if (targetPos < 30) return 'plutôt à gauche';
+    if (targetPos > 70) return 'plutôt à droite';
+    return 'vers le centre';
+  };
+
+  const getScoreMsg = () =>
+    ['Raté ! 😬', 'Proche ! 👍', 'Bien ! 🎯', 'Très bien ! ⭐', 'Parfait ! 🎉'][roundPoints];
+
+  const getScoreColor = () => {
+    if (roundPoints >= 4) return PALETTE.green;
+    if (roundPoints >= 2) return PALETTE.amber;
+    return PALETTE.red;
+  };
+
+  // ── Actions ──────────────────────────────────────────────────────────────
 
   const addPlayer = () => {
     if (players.length >= 5) return;
-    setPlayers([...players, { name: `Joueur ${players.length + 1}`, score: 0 }]);
+    setPlayers(prev => [...prev, { name: `Joueur ${prev.length + 1}`, score: 0 }]);
   };
 
   const removePlayer = (i: number) => {
     if (players.length <= 2) return;
-    setPlayers(players.filter((_, idx) => idx !== i));
+    setPlayers(prev => prev.filter((_, idx) => idx !== i));
   };
 
   const updatePlayerName = (i: number, name: string) => {
-    const updated = [...players];
-    updated[i].name = name;
-    setPlayers(updated);
+    setPlayers(prev => prev.map((p, idx) => idx === i ? { ...p, name } : p));
   };
 
   const startGame = () => {
-    if (players.length < 2) return;
     const reset = players.map(p => ({ ...p, score: 0 }));
     setPlayers(reset);
     setCurrentRound(0);
@@ -101,16 +150,13 @@ export default function HomeScreen() {
     while (used.includes(idx) && used.length < CARDS.length)
       idx = Math.floor(Math.random() * CARDS.length);
 
-    const newUsed = [...used, idx];
-    const target = 15 + Math.floor(Math.random() * 70);
-
     setCurrentRound(newRound);
     setCurrentCard(CARDS[idx]);
-    setTargetPos(target);
+    setTargetPos(15 + Math.floor(Math.random() * 70));
     setGuessPos(50);
     guessPosRef.current = 50;
     setClue('');
-    setUsedCards(newUsed);
+    setUsedCards([...used, idx]);
     setPhase('clue');
   };
 
@@ -122,16 +168,23 @@ export default function HomeScreen() {
   const submitGuess = () => {
     const distance = Math.abs(guessPosRef.current - targetPos);
     let pts = 0;
-    if (distance <= ZONE_PCT / 2) pts = 4;
-    else if (distance <= ZONE_PCT) pts = 3;
+    if (distance <= ZONE_PCT / 2)       pts = 4;
+    else if (distance <= ZONE_PCT)      pts = 3;
     else if (distance <= ZONE_PCT * 1.5) pts = 2;
-    else if (distance <= ZONE_PCT * 2) pts = 1;
+    else if (distance <= ZONE_PCT * 2)  pts = 1;
 
-    const updated = [...players];
-    updated.forEach((p, i) => { if (i !== currentGiver) p.score += pts; });
-    setPlayers(updated);
+    setPlayers(prev =>
+      prev.map((p, i) => i !== currentGiver ? { ...p, score: p.score + pts } : p)
+    );
     setRoundPoints(pts);
     setGuessPos(guessPosRef.current);
+
+    scoreScale.value = withSequence(
+      withTiming(0, { duration: 0 }),
+      withSpring(1.2, { damping: 6, stiffness: 200 }),
+      withSpring(1.0, { damping: 14 })
+    );
+
     setPhase('reveal');
   };
 
@@ -142,276 +195,525 @@ export default function HomeScreen() {
   };
 
   const restartGame = () => {
-    setPlayers(players.map(p => ({ ...p, score: 0 })));
+    scoreScale.value = 0;
+    setPlayers(prev => prev.map(p => ({ ...p, score: 0 })));
     setPhase('setup');
   };
 
-  const getHint = () => {
-    if (targetPos < 30) return 'plutôt à gauche';
-    if (targetPos > 70) return 'plutôt à droite';
-    return 'vers le centre';
-  };
-
-  const getScoreMsg = () => {
-    const msgs = ['Raté !', 'Proche !', 'Bien !', 'Très bien !', 'Parfait !'];
-    return msgs[roundPoints];
-  };
-
-  const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+  // ── Rendu spectrum ────────────────────────────────────────────────────────
 
   const zoneLeft = Math.max(0, Math.min(80, targetPos - ZONE_PCT / 2));
 
+  const renderSpectrum = ({
+    showTarget = false,
+    showCursor = false,
+    interactive = false,
+  }: { showTarget?: boolean; showCursor?: boolean; interactive?: boolean }) => (
+    <View style={s.spectrumWrap} {...(interactive ? panResponder.panHandlers : {})}>
+      <View style={s.spectrumBar}>
+        {SPECTRUM_COLORS.map((color, i) => (
+          <View key={i} style={{ flex: 1, height: '100%', backgroundColor: color }} />
+        ))}
+        {showTarget && (
+          <View style={[s.targetZone, { left: `${zoneLeft}%` as any, width: `${ZONE_PCT}%` as any }]} />
+        )}
+        {showCursor && (
+          <View style={[s.cursor, { left: `${guessPos}%` as any }]} />
+        )}
+      </View>
+      <View style={s.spectrumLabels}>
+        <Text style={[s.spectrumLabel, { color: PALETTE.blue }]}>{currentCard[0]}</Text>
+        <Text style={[s.spectrumLabel, { color: PALETTE.red }]}>{currentCard[1]}</Text>
+      </View>
+    </View>
+  );
+
+  // ── Rendu concept card ────────────────────────────────────────────────────
+
+  const renderConceptCard = () => (
+    <View style={s.conceptCard}>
+      <Text style={[s.conceptWord, { color: PALETTE.blue }]}>{currentCard[0]}</Text>
+      <Text style={s.conceptDivider}>←————→</Text>
+      <Text style={[s.conceptWord, { color: PALETTE.red }]}>{currentCard[1]}</Text>
+    </View>
+  );
+
+  // ── Rendu scores ──────────────────────────────────────────────────────────
+
+  const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+  const MEDALS = ['🥇', '🥈', '🥉', '🏅', '🏅'];
+
+  const renderScores = (showPts = false) =>
+    sortedPlayers.map((p, i) => {
+      const colorIdx = players.findIndex(pl => pl.name === p.name);
+      return (
+        <View key={i} style={[s.scoreRow, i === 0 && s.scoreRowFirst]}>
+          <View style={s.scoreRowLeft}>
+            <Text style={s.medal}>{MEDALS[i]}</Text>
+            <View style={[s.avatarSm, { backgroundColor: PLAYER_COLORS[colorIdx] ?? PALETTE.gray400 }]}>
+              <Text style={s.avatarSmText}>{initials(p.name)}</Text>
+            </View>
+            <Text style={[s.scoreRowName, i === 0 && s.scoreRowNameFirst]}>{p.name}</Text>
+          </View>
+          <Text style={[s.scoreRowPts, i === 0 && s.scoreRowPtsFirst]}>
+            {p.score}{showPts ? ' pts' : ''}
+          </Text>
+        </View>
+      );
+    });
+
+  // ── UI ───────────────────────────────────────────────────────────────────
+
+  const bg = PHASE_BG[phase];
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={[s.safe, { backgroundColor: bg }]}>
+      <StatusBar barStyle="light-content" backgroundColor={bg} />
 
-        {phase === 'setup' && (
-          <View>
-            <Text style={styles.title}>Longueur d'onde</Text>
-            <Text style={styles.subtitle}>Configurez votre partie</Text>
+      {/* ── En-tête coloré ── */}
+      <View style={[s.header, { backgroundColor: bg }]}>
+        {phase === 'setup' && <>
+          <Text style={s.headerEmoji}>🌊</Text>
+          <Text style={s.headerTitle}>Longueur d'onde</Text>
+          <Text style={s.headerSub}>Lisez dans les esprits</Text>
+        </>}
+        {phase === 'clue' && <>
+          <Text style={s.headerBadge}>MANCHE {currentRound} / {totalRounds}</Text>
+          <Text style={s.headerTitle}>🎭 {players[currentGiver].name}</Text>
+          <Text style={s.headerSub}>donne l'indice</Text>
+        </>}
+        {phase === 'guess' && <>
+          <Text style={s.headerBadge}>MANCHE {currentRound} / {totalRounds}</Text>
+          <Text style={s.headerTitle}>🎯 À vous de jouer !</Text>
+          <Text style={s.headerSub}>Où se cache la réponse ?</Text>
+        </>}
+        {phase === 'reveal' && <>
+          <Text style={s.headerBadge}>MANCHE {currentRound} / {totalRounds}</Text>
+          <Text style={s.headerTitle}>Résultat</Text>
+        </>}
+        {phase === 'end' && <>
+          <Text style={s.headerEmoji}>🏆</Text>
+          <Text style={s.headerTitle}>Fin de partie !</Text>
+          <Text style={s.headerSub}>Classement final</Text>
+        </>}
+      </View>
 
-            <Text style={styles.sectionLabel}>Joueurs</Text>
+      {/* ── Feuille blanche ── */}
+      <View style={s.sheet}>
+        <ScrollView
+          contentContainerStyle={s.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+
+          {/* ──────────────── SETUP ──────────────── */}
+          {phase === 'setup' && <>
+            <Text style={s.label}>JOUEURS</Text>
+
             {players.map((p, i) => (
-              <View key={i} style={styles.playerRow}>
+              <View key={i} style={s.playerRow}>
+                <View style={[s.avatar, { backgroundColor: PLAYER_COLORS[i] }]}>
+                  <Text style={s.avatarText}>{initials(p.name)}</Text>
+                </View>
                 <TextInput
-                  style={styles.playerInput}
+                  style={s.playerInput}
                   value={p.name}
                   onChangeText={t => updatePlayerName(i, t)}
                   placeholder={`Joueur ${i + 1}`}
+                  placeholderTextColor={PALETTE.gray400}
                 />
-                <TouchableOpacity onPress={() => removePlayer(i)} style={styles.removeBtn}>
-                  <Text style={styles.removeBtnText}>✕</Text>
-                </TouchableOpacity>
+                {players.length > 2 && (
+                  <TouchableOpacity onPress={() => removePlayer(i)} style={s.removeBtn}>
+                    <Text style={s.removeBtnText}>✕</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ))}
-            <TouchableOpacity style={styles.btnOutline} onPress={addPlayer}>
-              <Text style={styles.btnOutlineText}>+ Ajouter un joueur</Text>
-            </TouchableOpacity>
 
-            <Text style={[styles.sectionLabel, { marginTop: 24 }]}>Nombre de manches</Text>
-            <View style={styles.roundsRow}>
+            {players.length < 5 && (
+              <TouchableOpacity style={s.addBtn} onPress={addPlayer}>
+                <Text style={s.addBtnText}>+ Ajouter un joueur</Text>
+              </TouchableOpacity>
+            )}
+
+            <Text style={[s.label, { marginTop: 28 }]}>NOMBRE DE MANCHES</Text>
+            <View style={s.roundsRow}>
               {[8, 12, 16].map(n => (
                 <TouchableOpacity
                   key={n}
-                  style={[styles.roundBtn, totalRounds === n && styles.roundBtnActive]}
+                  style={[s.roundBtn, totalRounds === n && s.roundBtnActive]}
                   onPress={() => setTotalRounds(n)}
                 >
-                  <Text style={[styles.roundBtnText, totalRounds === n && styles.roundBtnTextActive]}>
-                    {n}
-                  </Text>
+                  <Text style={[s.roundBtnN, totalRounds === n && s.roundBtnNActive]}>{n}</Text>
+                  <Text style={[s.roundBtnSub, totalRounds === n && { color: PALETTE.white }]}>manches</Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            <TouchableOpacity style={[styles.btn, { marginTop: 32 }]} onPress={startGame}>
-              <Text style={styles.btnText}>Commencer</Text>
+            <TouchableOpacity
+              style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 36 }]}
+              onPress={startGame}
+            >
+              <Text style={s.bigBtnText}>Commencer la partie →</Text>
             </TouchableOpacity>
-          </View>
-        )}
+          </>}
 
-        {phase === 'clue' && (
-          <View>
-            <Text style={styles.roundInfo}>
-              Manche {currentRound}/{totalRounds} — Faiseur d'indice : {players[currentGiver].name}
-            </Text>
+          {/* ──────────────── CLUE ──────────────── */}
+          {phase === 'clue' && <>
+            {renderConceptCard()}
 
-            <View style={styles.cardBox}>
-              <View style={styles.conceptsRow}>
-                <Text style={styles.conceptLeft}>{currentCard[0]}</Text>
-                <Text style={styles.conceptDivider}>←————→</Text>
-                <Text style={styles.conceptRight}>{currentCard[1]}</Text>
-              </View>
-              <Text style={styles.cardSubtitle}>Le spectre va de l'un à l'autre</Text>
+            <View style={s.hintBox}>
+              <Text style={s.hintText}>
+                La cible est{' '}
+                <Text style={s.hintBold}>{getHint()}</Text>
+                {' '}({Math.round(targetPos)} %)
+              </Text>
             </View>
 
-            <Text style={styles.hintText}>
-              La cible est <Text style={styles.hintBold}>{getHint()}</Text> ({Math.round(targetPos)}%) — donnez un indice !
-            </Text>
+            {renderSpectrum({ showTarget: true })}
 
-            <View style={styles.spectrumWrap}>
-              <View style={styles.spectrumBar}>
-                <View style={[styles.targetZone, { left: `${zoneLeft}%`, width: `${ZONE_PCT}%` }]} />
-              </View>
-              <View style={styles.spectrumLabels}>
-                <Text style={styles.spectrumLabel}>{currentCard[0]}</Text>
-                <Text style={styles.spectrumLabel}>{currentCard[1]}</Text>
-              </View>
-            </View>
-
-            <Text style={styles.sectionLabel}>Votre indice (un mot ou courte phrase)</Text>
+            <Text style={s.label}>VOTRE INDICE</Text>
             <TextInput
-              style={styles.clueInput}
+              style={s.clueInput}
               value={clue}
               onChangeText={setClue}
-              placeholder="Ex: tiède, passable, modéré..."
+              placeholder="Un mot ou une courte phrase..."
+              placeholderTextColor={PALETTE.gray400}
               maxLength={40}
+              autoFocus
             />
-            <TouchableOpacity style={styles.btn} onPress={submitClue}>
-              <Text style={styles.btnText}>Passer le téléphone →</Text>
+
+            <TouchableOpacity
+              style={[s.bigBtn, { backgroundColor: PALETTE.blue }]}
+              onPress={submitClue}
+            >
+              <Text style={s.bigBtnText}>Passer le téléphone →</Text>
             </TouchableOpacity>
-          </View>
-        )}
+          </>}
 
-        {phase === 'guess' && (
-          <View>
-            <Text style={styles.roundInfo}>
-              Manche {currentRound}/{totalRounds} — Devinez !
-            </Text>
+          {/* ──────────────── GUESS ──────────────── */}
+          {phase === 'guess' && <>
+            {renderConceptCard()}
 
-            <View style={styles.cardBox}>
-              <View style={styles.conceptsRow}>
-                <Text style={styles.conceptLeft}>{currentCard[0]}</Text>
-                <Text style={styles.conceptDivider}>←————→</Text>
-                <Text style={styles.conceptRight}>{currentCard[1]}</Text>
-              </View>
-              <Text style={styles.clueDisplay}>"{clue}"</Text>
+            <View style={s.clueBox}>
+              <Text style={s.clueBoxLabel}>L'INDICE</Text>
+              <Text style={s.clueBoxText}>"{clue}"</Text>
             </View>
 
-            <Text style={styles.hintText}>Glissez le curseur pour deviner</Text>
+            <Text style={s.guideText}>Glissez pour placer votre réponse</Text>
 
-            <View style={styles.spectrumWrap} {...panResponder.panHandlers}>
-              <View style={styles.spectrumBar}>
-                <View style={[styles.cursor, { left: `${guessPos}%` }]} />
-              </View>
-              <View style={styles.spectrumLabels}>
-                <Text style={styles.spectrumLabel}>{currentCard[0]}</Text>
-                <Text style={styles.spectrumLabel}>{currentCard[1]}</Text>
-              </View>
-            </View>
+            {renderSpectrum({ showCursor: true, interactive: true })}
 
-            <TouchableOpacity style={[styles.btn, { marginTop: 16 }]} onPress={submitGuess}>
-              <Text style={styles.btnText}>Valider ma position</Text>
+            <TouchableOpacity
+              style={[s.bigBtn, { backgroundColor: PALETTE.teal, marginTop: 8 }]}
+              onPress={submitGuess}
+            >
+              <Text style={s.bigBtnText}>Valider ma position →</Text>
             </TouchableOpacity>
-          </View>
-        )}
+          </>}
 
-        {phase === 'reveal' && (
-          <View>
-            <Text style={styles.roundInfo}>
-              Manche {currentRound}/{totalRounds} — Résultat
-            </Text>
+          {/* ──────────────── REVEAL ──────────────── */}
+          {phase === 'reveal' && <>
+            {renderConceptCard()}
 
-            <View style={styles.cardBox}>
-              <View style={styles.conceptsRow}>
-                <Text style={styles.conceptLeft}>{currentCard[0]}</Text>
-                <Text style={styles.conceptDivider}>←————→</Text>
-                <Text style={styles.conceptRight}>{currentCard[1]}</Text>
-              </View>
-              <Text style={styles.clueDisplay}>"{clue}"</Text>
+            <View style={s.clueBox}>
+              <Text style={s.clueBoxLabel}>L'INDICE</Text>
+              <Text style={s.clueBoxText}>"{clue}"</Text>
             </View>
 
-            <View style={styles.spectrumWrap}>
-              <View style={styles.spectrumBar}>
-                <View style={[styles.targetZone, { left: `${zoneLeft}%`, width: `${ZONE_PCT}%` }]} />
-                <View style={[styles.cursor, { left: `${guessPos}%` }]} />
-              </View>
-              <View style={styles.spectrumLabels}>
-                <Text style={styles.spectrumLabel}>{currentCard[0]}</Text>
-                <Text style={styles.spectrumLabel}>{currentCard[1]}</Text>
-              </View>
-            </View>
+            {renderSpectrum({ showTarget: true, showCursor: true })}
 
-            <View style={styles.scoreReveal}>
-              <Text style={[styles.scorePoints, { color: roundPoints >= 3 ? '#1D9E75' : roundPoints >= 1 ? '#BA7517' : '#A32D2D' }]}>
-                +{roundPoints}
-              </Text>
-              <Text style={styles.scoreMsg}>{getScoreMsg()}</Text>
-            </View>
+            <Animated.View style={[s.scoreReveal, scoreAnimStyle]}>
+              <Text style={[s.scorePoints, { color: getScoreColor() }]}>+{roundPoints}</Text>
+              <Text style={s.scoreMsg}>{getScoreMsg()}</Text>
+            </Animated.View>
 
-            <Text style={styles.sectionLabel}>Scores</Text>
-            {sortedPlayers.map((p, i) => (
-              <View key={i} style={styles.scoreRow}>
-                <Text style={styles.scoreRowName}>
-                  {i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : ''}{p.name}
-                </Text>
-                <Text style={styles.scoreRowPts}>{p.score}</Text>
-              </View>
-            ))}
+            <Text style={s.label}>SCORES</Text>
+            {renderScores()}
 
-            <TouchableOpacity style={[styles.btn, { marginTop: 24 }]} onPress={goNextRound}>
-              <Text style={styles.btnText}>
+            <TouchableOpacity
+              style={[s.bigBtn, { backgroundColor: PALETTE.amber, marginTop: 24 }]}
+              onPress={goNextRound}
+            >
+              <Text style={s.bigBtnText}>
                 {currentRound >= totalRounds ? 'Voir les résultats →' : 'Manche suivante →'}
               </Text>
             </TouchableOpacity>
-          </View>
-        )}
+          </>}
 
-        {phase === 'end' && (
-          <View>
-            <Text style={styles.title}>Fin de partie !</Text>
-            <Text style={styles.sectionLabel}>Classement final</Text>
-            {sortedPlayers.map((p, i) => (
-              <View key={i} style={styles.scoreRow}>
-                <Text style={styles.scoreRowName}>
-                  {i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : ''}{p.name}
-                </Text>
-                <Text style={styles.scoreRowPts}>{p.score} pts</Text>
-              </View>
-            ))}
-            <TouchableOpacity style={[styles.btn, { marginTop: 32 }]} onPress={restartGame}>
-              <Text style={styles.btnText}>Rejouer</Text>
+          {/* ──────────────── END ──────────────── */}
+          {phase === 'end' && <>
+            <Text style={s.label}>CLASSEMENT FINAL</Text>
+            {renderScores(true)}
+
+            <TouchableOpacity
+              style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 36 }]}
+              onPress={restartGame}
+            >
+              <Text style={s.bigBtnText}>Rejouer 🎮</Text>
             </TouchableOpacity>
-          </View>
-        )}
+          </>}
 
-      </ScrollView>
+        </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  container: { padding: 24, paddingBottom: 60 },
-  title: { fontSize: 26, fontWeight: '600', marginBottom: 4, color: '#1a1a1a' },
-  subtitle: { fontSize: 14, color: '#888', marginBottom: 24 },
-  sectionLabel: { fontSize: 12, fontWeight: '600', color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
-  roundInfo: { fontSize: 13, color: '#888', marginBottom: 16 },
-  playerRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  playerInput: { flex: 1, borderWidth: 0.5, borderColor: '#ccc', borderRadius: 8, padding: 10, fontSize: 14, color: '#1a1a1a' },
-  removeBtn: { padding: 10, borderWidth: 0.5, borderColor: '#ccc', borderRadius: 8 },
-  removeBtnText: { color: '#888', fontSize: 14 },
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  safe:  { flex: 1 },
+
+  // Header
+  header: {
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 32,
+    alignItems: 'center',
+  },
+  headerEmoji: { fontSize: 52, marginBottom: 6 },
+  headerBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.65)',
+    letterSpacing: 1.8,
+    marginBottom: 4,
+  },
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#fff',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  headerSub: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+  },
+
+  // Sheet
+  sheet: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
+  },
+  content: { padding: 24, paddingBottom: 64 },
+
+  // Labels
+  label: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: PALETTE.gray400,
+    letterSpacing: 1.6,
+    marginBottom: 12,
+  },
+
+  // ── Setup ──
+  playerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: { color: '#fff', fontWeight: '800', fontSize: 17 },
+  playerInput: {
+    flex: 1,
+    backgroundColor: PALETTE.gray100,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: PALETTE.dark,
+  },
+  removeBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: PALETTE.gray100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  removeBtnText: { color: PALETTE.gray600, fontSize: 13, fontWeight: '700' },
+  addBtn: {
+    borderWidth: 1.5,
+    borderColor: PALETTE.gray200,
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    padding: 13,
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  addBtnText: { color: PALETTE.gray600, fontSize: 14, fontWeight: '500' },
+
   roundsRow: { flexDirection: 'row', gap: 10 },
-  roundBtn: { flex: 1, padding: 12, borderWidth: 0.5, borderColor: '#ccc', borderRadius: 8, alignItems: 'center' },
-  roundBtnActive: { backgroundColor: '#1a1a1a', borderColor: '#1a1a1a' },
-  roundBtnText: { fontSize: 15, color: '#1a1a1a' },
-  roundBtnTextActive: { color: '#fff' },
-  btn: { backgroundColor: '#1a1a1a', borderRadius: 10, padding: 14, alignItems: 'center' },
-  btnText: { color: '#fff', fontSize: 15, fontWeight: '500' },
-  btnOutline: { borderWidth: 0.5, borderColor: '#ccc', borderRadius: 10, padding: 12, alignItems: 'center', marginTop: 4 },
-  btnOutlineText: { color: '#1a1a1a', fontSize: 14 },
-  cardBox: { backgroundColor: '#f5f5f5', borderRadius: 12, padding: 20, marginBottom: 20, alignItems: 'center' },
-  conceptsRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-  conceptLeft: { fontSize: 15, fontWeight: '600', color: '#185FA5' },
-  conceptRight: { fontSize: 15, fontWeight: '600', color: '#993C1D' },
-  conceptDivider: { fontSize: 12, color: '#aaa' },
-  cardSubtitle: { fontSize: 13, color: '#888' },
-  clueDisplay: { fontSize: 17, fontWeight: '500', marginTop: 10, color: '#1a1a1a' },
-  hintText: { fontSize: 13, color: '#888', marginBottom: 12 },
-  hintBold: { fontWeight: '600', color: '#1a1a1a' },
+  roundBtn: {
+    flex: 1,
+    padding: 14,
+    borderWidth: 1.5,
+    borderColor: PALETTE.gray200,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  roundBtnActive:   { backgroundColor: PALETTE.purple, borderColor: PALETTE.purple },
+  roundBtnN:        { fontSize: 22, fontWeight: '800', color: PALETTE.dark },
+  roundBtnNActive:  { color: '#fff' },
+  roundBtnSub:      { fontSize: 11, color: PALETTE.gray400, marginTop: 2 },
+
+  // ── Shared ──
+  bigBtn: {
+    borderRadius: 16,
+    padding: 17,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  bigBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
+  conceptCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: PALETTE.gray100,
+    borderRadius: 18,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    marginBottom: 16,
+  },
+  conceptWord:    { fontSize: 18, fontWeight: '800', flex: 1, textAlign: 'center' },
+  conceptDivider: { fontSize: 12, color: PALETTE.gray400, paddingHorizontal: 6 },
+
+  // ── Clue phase ──
+  hintBox: {
+    backgroundColor: PALETTE.blueLight,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  hintText: { fontSize: 13, color: PALETTE.blueDark, textAlign: 'center' },
+  hintBold: { fontWeight: '800' },
+
+  clueInput: {
+    backgroundColor: PALETTE.gray100,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 17,
+    color: PALETTE.dark,
+    marginBottom: 16,
+  },
+
+  // ── Guess phase ──
+  clueBox: {
+    backgroundColor: PALETTE.tealLight,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  clueBoxLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: PALETTE.teal,
+    letterSpacing: 1.6,
+    marginBottom: 4,
+  },
+  clueBoxText: { fontSize: 22, fontWeight: '800', color: PALETTE.tealDark },
+
+  guideText: {
+    fontSize: 13,
+    color: PALETTE.gray400,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+
+  // ── Spectrum ──
   spectrumWrap: { marginBottom: 20 },
   spectrumBar: {
-    height: 28, borderRadius: 14, overflow: 'hidden',
-    backgroundColor: '#ddd', position: 'relative',
+    height: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    position: 'relative',
   },
   targetZone: {
-    position: 'absolute', top: 0, height: 28,
-    backgroundColor: 'rgba(99,56,6,0.25)',
-    borderWidth: 2, borderColor: 'rgba(99,56,6,0.5)',
-    borderRadius: 4,
+    position: 'absolute',
+    top: 0,
+    height: 48,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.85)',
+    borderRadius: 8,
   },
   cursor: {
-    position: 'absolute', top: 2, width: 24, height: 24,
-    borderRadius: 12, backgroundColor: '#fff',
-    borderWidth: 2.5, borderColor: '#1a1a1a',
-    marginLeft: -12,
+    position: 'absolute',
+    top: 6,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 3.5,
+    borderColor: PALETTE.dark,
+    marginLeft: -18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 5,
   },
-  spectrumLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  spectrumLabel: { fontSize: 12, color: '#888' },
-  clueInput: { borderWidth: 0.5, borderColor: '#ccc', borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16, color: '#1a1a1a' },
-  scoreReveal: { alignItems: 'center', paddingVertical: 24 },
-  scorePoints: { fontSize: 52, fontWeight: '600' },
-  scoreMsg: { fontSize: 16, color: '#888', marginTop: 6 },
-  scoreRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#eee' },
-  scoreRowName: { fontSize: 15, color: '#1a1a1a' },
-  scoreRowPts: { fontSize: 20, fontWeight: '500', color: '#1a1a1a' },
+  spectrumLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  spectrumLabel: { fontSize: 12, fontWeight: '700' },
+
+  // ── Reveal phase ──
+  scoreReveal: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  scorePoints: { fontSize: 80, fontWeight: '900', lineHeight: 88 },
+  scoreMsg:    { fontSize: 18, color: PALETTE.gray600, marginTop: 4, fontWeight: '600' },
+
+  // ── Scores ──
+  scoreRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: PALETTE.gray100,
+  },
+  scoreRowFirst: {
+    backgroundColor: PALETTE.purpleLight,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: 0,
+    marginBottom: 6,
+    paddingVertical: 12,
+  },
+  scoreRowLeft:      { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  medal:             { fontSize: 20, width: 26 },
+  avatarSm: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarSmText:       { color: '#fff', fontWeight: '700', fontSize: 13 },
+  scoreRowName:       { fontSize: 15, color: PALETTE.dark, fontWeight: '500' },
+  scoreRowNameFirst:  { fontWeight: '800', fontSize: 16 },
+  scoreRowPts:        { fontSize: 20, fontWeight: '700', color: PALETTE.dark },
+  scoreRowPtsFirst:   { fontSize: 24, color: PALETTE.purple },
 });
