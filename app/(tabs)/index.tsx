@@ -77,6 +77,26 @@ function secColor(
   return '#0D1B2A';
 }
 
+// ── Wave dots animés ──────────────────────────────────────────────────────────
+function WaveDot({ delay, size, opacity }: { delay: number; size: number; opacity: number }) {
+  const y = useSharedValue(0);
+  useEffect(() => {
+    y.value = withDelay(delay, withRepeat(
+      withSequence(
+        withTiming(-9, { duration: 500, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0,  { duration: 500, easing: Easing.inOut(Easing.sin) }),
+      ), -1, false,
+    ));
+  }, []);
+  const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
+  return (
+    <Animated.View style={[{
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: 'rgba(255,255,255,0.9)', opacity,
+    }, style]} />
+  );
+}
+
 // ── Confettis ─────────────────────────────────────────────────────────────────
 const CONFETTI_COLORS = ['#EF4444','#F97316','#EAB308','#22C55E','#3B82F6','#8B5CF6','#EC4899'];
 const CONFETTI_DATA = Array.from({ length: 20 }, (_, i) => ({
@@ -200,7 +220,7 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    transOpacity.value = withTiming(1, { duration: 260, easing: Easing.out(Easing.quad) });
+    transOpacity.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.cubic) });
   }, [phase]);
 
   // Timer
@@ -290,11 +310,12 @@ export default function HomeScreen() {
     targetPos < 30 ? 'plutôt à gauche' : targetPos > 70 ? 'plutôt à droite' : 'vers le centre';
   const zones = expertMode ? ZONES_EXPERT : ZONES_NORMAL;
 
-  const scoreMsgs   = ['Raté ! 😬', 'Proche ! 👍', 'Bien ! 🎯', '', 'Très bien ! ⭐', 'Parfait ! 🎉'];
-  const scoreColors = [PALETTE.red, PALETTE.coral, PALETTE.amber, PALETTE.amber, PALETTE.green, PALETTE.green];
+  // Index = pts (0,1,2,3,4,5) — seuls 0, 1, 3, 5 sont utilisés dans ce jeu
+  const scoreMsgs   = ['Raté ! 😬', 'Proche ! 👍', '', 'Bien joué ! 🎯', '', 'BULLSEYE ! 🎉'];
+  const scoreColors = [PALETTE.red, PALETTE.coral, PALETTE.amber, PALETTE.blue, PALETTE.blue, PALETTE.green];
 
   const changePhase = (p: Phase) => {
-    transOpacity.value = withTiming(0, { duration: 160 }, (done) => {
+    transOpacity.value = withTiming(0, { duration: 120, easing: Easing.in(Easing.quad) }, (done) => {
       if (done) runOnJS(setPhase)(p);
     });
   };
@@ -536,6 +557,16 @@ export default function HomeScreen() {
           }} />
         </View>
 
+        {/* ── Bordure extérieure (hors overflow:hidden) ── */}
+        <View pointerEvents="none" style={{
+          position: 'absolute', left: 0, top: 0,
+          width: DIAL_W, height: DIAL_R + HUB_R,
+          borderTopLeftRadius: DIAL_R, borderTopRightRadius: DIAL_R,
+          borderTopWidth: 3, borderLeftWidth: 3, borderRightWidth: 3, borderBottomWidth: 0,
+          borderColor: showTarget ? 'rgba(255,255,255,0.2)' : 'rgba(80,170,210,0.45)',
+          backgroundColor: 'transparent',
+        }} />
+
         {/* ── Étiquettes (hors overflow:hidden) ── */}
         <Text style={[s.dialLbl, s.dialLblL, { top: DIAL_R + HUB_R + 7 }]}>
           ← {currentCard[0]}
@@ -549,9 +580,15 @@ export default function HomeScreen() {
 
   const renderConcept = () => (
     <View style={s.conceptCard}>
-      <Text style={[s.conceptWord, { color: PALETTE.blue }]}>{currentCard[0]}</Text>
-      <Text style={s.conceptDiv}>←————→</Text>
-      <Text style={[s.conceptWord, { color: PALETTE.red }]}>{currentCard[1]}</Text>
+      <View style={s.conceptSide}>
+        <Text style={s.conceptArrow}>←</Text>
+        <Text style={[s.conceptWord, { color: PALETTE.blue }]} numberOfLines={2}>{currentCard[0]}</Text>
+      </View>
+      <View style={s.conceptDivider} />
+      <View style={s.conceptSide}>
+        <Text style={[s.conceptWord, { color: PALETTE.red }]} numberOfLines={2}>{currentCard[1]}</Text>
+        <Text style={s.conceptArrow}>→</Text>
+      </View>
     </View>
   );
 
@@ -639,20 +676,25 @@ export default function HomeScreen() {
             <Text style={s.homeTitle}>Longueur{'\n'}d'onde</Text>
             <Text style={s.homeSub}>Le jeu qui lit dans les esprits</Text>
             <View style={s.waveDots}>
-              {[0.2, 0.45, 0.7, 0.45, 0.2].map((op, i) => (
-                <View key={i} style={[s.waveDot, { opacity: op, transform: [{ scale: 0.6 + op * 0.8 }] }]} />
+              {[
+                { op: 0.35, sz: 9,  delay: 0   },
+                { op: 0.55, sz: 12, delay: 120  },
+                { op: 0.85, sz: 16, delay: 240  },
+                { op: 0.55, sz: 12, delay: 360  },
+                { op: 0.35, sz: 9,  delay: 480  },
+              ].map((d, i) => (
+                <WaveDot key={i} delay={d.delay} size={d.sz} opacity={d.op} />
               ))}
             </View>
             <TouchableOpacity style={s.homeBtn} activeOpacity={0.85} onPress={() => changePhase('setup')}>
               <Text style={s.homeBtnTxt}>Jouer →</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={s.homeBtnSecondary} activeOpacity={0.8} onPress={() => changePhase('store')}>
+              <Text style={s.homeBtnSecondaryTxt}>🛍️ Boutique</Text>
+            </TouchableOpacity>
             <View style={s.homeLinks}>
               <TouchableOpacity activeOpacity={0.7} onPress={() => changePhase('rules')}>
                 <Text style={s.homeLinkTxt}>Comment jouer ?</Text>
-              </TouchableOpacity>
-              <Text style={s.homeLinkTxt}> · </Text>
-              <TouchableOpacity activeOpacity={0.7} onPress={() => changePhase('store')}>
-                <Text style={s.homeLinkTxt}>🛍️ Boutique</Text>
               </TouchableOpacity>
             </View>
           </Animated.View>
@@ -999,10 +1041,12 @@ const s = StyleSheet.create({
   homeSub:     { fontSize: 16, color: 'rgba(255,255,255,0.72)', textAlign: 'center', marginBottom: 36 },
   waveDots:    { flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 40 },
   waveDot:     { width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.9)' },
-  homeBtn:     { backgroundColor: '#fff', borderRadius: 20, paddingVertical: 18, paddingHorizontal: 52, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 8, marginBottom: 20 },
-  homeBtnTxt:  { color: PALETTE.purple, fontSize: 20, fontWeight: '800' },
-  homeLinks:   { flexDirection: 'row', alignItems: 'center' },
-  homeLinkTxt: { color: 'rgba(255,255,255,0.6)', fontSize: 14, textDecorationLine: 'underline' },
+  homeBtn:            { backgroundColor: '#fff', borderRadius: 20, paddingVertical: 18, paddingHorizontal: 52, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 8, marginBottom: 14 },
+  homeBtnTxt:         { color: PALETTE.purple, fontSize: 20, fontWeight: '800' },
+  homeBtnSecondary:   { borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 16, paddingVertical: 13, paddingHorizontal: 36, marginBottom: 20 },
+  homeBtnSecondaryTxt:{ color: '#fff', fontSize: 15, fontWeight: '700' },
+  homeLinks:          { flexDirection: 'row', alignItems: 'center' },
+  homeLinkTxt:        { color: 'rgba(255,255,255,0.55)', fontSize: 13, textDecorationLine: 'underline' },
 
   // Règles
   rulesContainer: { padding: 28, paddingBottom: 60 },
@@ -1109,9 +1153,11 @@ const s = StyleSheet.create({
   countdownNum: { fontSize: 80, fontWeight: '900', color: PALETTE.teal },
   countdownSub: { fontSize: 14, color: PALETTE.gray400, marginTop: 4 },
 
-  conceptCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: PALETTE.gray100, borderRadius: 18, paddingHorizontal: 20, paddingVertical: 18, marginBottom: 16 },
-  conceptWord: { fontSize: 18, fontWeight: '800', flex: 1, textAlign: 'center' },
-  conceptDiv:  { fontSize: 12, color: PALETTE.gray400, paddingHorizontal: 6 },
+  conceptCard:    { flexDirection: 'row', alignItems: 'center', backgroundColor: PALETTE.gray100, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 16, marginBottom: 16, overflow: 'hidden' },
+  conceptSide:    { flex: 1, alignItems: 'center', gap: 4 },
+  conceptWord:    { fontSize: 17, fontWeight: '800', textAlign: 'center' },
+  conceptArrow:   { fontSize: 14, color: PALETTE.gray400, fontWeight: '700' },
+  conceptDivider: { width: 1, height: 40, backgroundColor: PALETTE.gray200, marginHorizontal: 10 },
 
   hintBox:   { backgroundColor: PALETTE.blueLight, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
   hintTxt:   { fontSize: 13, color: PALETTE.blueDark, textAlign: 'center' },
