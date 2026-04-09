@@ -74,6 +74,7 @@ export const PALETTE = {
 
 // Couleur de fond par phase
 export const PHASE_BG: Record<string, string> = {
+  home:   PALETTE.purple,
   setup:  PALETTE.purple,
   clue:   PALETTE.blue,
   guess:  PALETTE.teal,
