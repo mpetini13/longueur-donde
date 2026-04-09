@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
@@ -26,14 +27,14 @@ import { PALETTE, PHASE_BG, PLAYER_COLORS } from '@/constants/theme';
 
 // ── Dimensions ────────────────────────────────────────────────────────────────
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const DIAL_W   = SCREEN_WIDTH - 48;
-const DIAL_R   = DIAL_W / 2;
+const DIAL_W  = SCREEN_WIDTH - 48;
+const DIAL_R  = DIAL_W / 2;
 
 // ── Cadran ────────────────────────────────────────────────────────────────────
-const N_SEC    = 14;
-const SEC_DEG  = 180 / N_SEC;
-const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 0.84;
-const SEC_PCT  = 100 / N_SEC;
+const N_SEC   = 14;
+const SEC_DEG = 180 / N_SEC;
+const SEC_H   = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 0.84;
+const SEC_PCT = 100 / N_SEC;
 const NEEDLE_W = 7;
 const NEEDLE_L = DIAL_R * 0.70;
 const PIVOT_R  = 11;
@@ -42,17 +43,12 @@ const LABEL_H  = 34;
 const DIAL_H   = DIAL_R + PIVOT_R + LABEL_H;
 
 // ── Zones ─────────────────────────────────────────────────────────────────────
-const ZONE_5 = 2.5;
-const ZONE_3 = 10;
-const ZONE_1 = 15;
+const ZONES_NORMAL = { z5: 2.5, z3: 10, z1: 15 };
+const ZONES_EXPERT = { z5: 1,   z3: 5,  z1: 8  };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
   return (1 - pct / 100) * Math.PI;
-}
-function arcPos(pct: number, r: number) {
-  const θ = pctToAngle(pct);
-  return { x: DIAL_R + r * Math.cos(θ), y: DIAL_R - r * Math.sin(θ) };
 }
 function touchToPct(tx: number, ty: number): number {
   const dx = tx - DIAL_R;
@@ -62,15 +58,18 @@ function touchToPct(tx: number, ty: number): number {
   return Math.max(1, Math.min(99, (1 - Math.min(Math.PI, θ) / Math.PI) * 100));
 }
 
-// Couleur d'un secteur (sombre par défaut, coloré si showTarget et proche de la cible)
-function secColor(i: number, targetPct: number, showTarget: boolean): string {
+// Couleur d'un secteur
+function secColor(
+  i: number, targetPct: number, showTarget: boolean,
+  zones: { z5: number; z3: number; z1: number },
+): string {
   const DARK = '#14243A';
   if (!showTarget) return DARK;
   const center = (i + 0.5) * SEC_PCT;
   const dist   = Math.abs(center - targetPct);
-  if (dist <= ZONE_5 + SEC_PCT / 2) return '#EF4444';
-  if (dist <= ZONE_3 + SEC_PCT / 2) return '#F97316';
-  if (dist <= ZONE_1 + SEC_PCT / 2) return '#EAB308';
+  if (dist <= zones.z5 + SEC_PCT / 2) return '#EF4444';
+  if (dist <= zones.z3 + SEC_PCT / 2) return '#F97316';
+  if (dist <= zones.z1 + SEC_PCT / 2) return '#EAB308';
   return DARK;
 }
 
@@ -137,6 +136,7 @@ const MEDALS = ['🥇', '🥈', '🥉', '🏅', '🏅'];
 
 // ── Composant principal ───────────────────────────────────────────────────────
 export default function HomeScreen() {
+  // Jeu
   const [phase, setPhase]               = useState<Phase>('home');
   const [players, setPlayers]           = useState<Player[]>([
     { name: 'Joueur 1', score: 0 },
@@ -149,16 +149,28 @@ export default function HomeScreen() {
   const [targetPos, setTargetPos]       = useState(50);
   const [clue, setClue]                 = useState('');
   const [roundPoints, setRoundPoints]   = useState(0);
+  const [displayScore, setDisplayScore] = useState(0);
   const [teamBonus, setTeamBonus]       = useState(false);
   const [usedCards, setUsedCards]       = useState<number[]>([]);
   const [roundHistory, setRoundHistory] = useState<RoundRecord[]>([]);
+  const [cardSkipped, setCardSkipped]   = useState(false);
+
+  // Options (setup)
+  const [timerEnabled, setTimerEnabled]   = useState(false);
+  const [timerDuration, setTimerDuration] = useState(60);
+  const [expertMode, setExpertMode]       = useState(false);
+
+  // Timer
+  const [timeLeft, setTimeLeft] = useState(60);
+
   const guessPosRef = useRef(50);
 
   // ── Animations ──────────────────────────────────────────────────────────────
-  const logoScale   = useSharedValue(1);
-  const homeOpacity = useSharedValue(0);
-  const scoreScale  = useSharedValue(0);
-  const needleShared = useSharedValue(50);  // position 0-100 de l'aiguille
+  const logoScale    = useSharedValue(1);
+  const homeOpacity  = useSharedValue(0);
+  const scoreScale   = useSharedValue(0);
+  const needleShared = useSharedValue(50);
+  const transOpacity = useSharedValue(1);   // transitions de phase
 
   const logoStyle  = useAnimatedStyle(() => ({ transform: [{ scale: logoScale.value }] }));
   const homeStyle  = useAnimatedStyle(() => ({
@@ -169,11 +181,9 @@ export default function HomeScreen() {
     transform: [{ scale: scoreScale.value }],
     opacity: Math.min(1, scoreScale.value),
   }));
-  // Aiguille : rotation avec spring
   const needleRotStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${(needleShared.value / 100 - 0.5) * 180}deg` }],
   }));
-  // Bout de l'aiguille : position calculée depuis la valeur animée
   const tipStyle = useAnimatedStyle(() => {
     const θ = pctToAngle(needleShared.value);
     return {
@@ -181,7 +191,9 @@ export default function HomeScreen() {
       top:  DIAL_R - NEEDLE_L * Math.sin(θ) - 7,
     };
   });
+  const transStyle = useAnimatedStyle(() => ({ opacity: transOpacity.value }));
 
+  // Fade-in à l'entrée + animation logo home
   useEffect(() => {
     homeOpacity.value = withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
     logoScale.value   = withRepeat(
@@ -191,6 +203,31 @@ export default function HomeScreen() {
       ), -1, false,
     );
   }, []);
+
+  // Fade-in à chaque changement de phase
+  useEffect(() => {
+    transOpacity.value = withTiming(1, { duration: 260, easing: Easing.out(Easing.quad) });
+  }, [phase]);
+
+  // Timer
+  useEffect(() => {
+    setTimeLeft(timerDuration);
+    if (phase !== 'clue' || !timerEnabled) return;
+    const id = setInterval(() => {
+      setTimeLeft(t => Math.max(0, t - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [phase, timerEnabled, timerDuration]);
+
+  // Haptiques timer
+  useEffect(() => {
+    if (phase !== 'clue' || !timerEnabled) return;
+    if (timeLeft === 0) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } else if (timeLeft <= 5) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  }, [timeLeft]);
 
   // ── PanResponder ─────────────────────────────────────────────────────────────
   const pan = useRef(
@@ -205,7 +242,7 @@ export default function HomeScreen() {
       },
       onPanResponderMove: (e) => {
         const p = touchToPct(e.nativeEvent.locationX, e.nativeEvent.locationY);
-        needleShared.value  = p; // direct pour un suivi fluide
+        needleShared.value  = p;
         guessPosRef.current = p;
       },
     })
@@ -215,9 +252,30 @@ export default function HomeScreen() {
   const initials = (name: string) => name.trim().charAt(0).toUpperCase();
   const getHint  = () =>
     targetPos < 30 ? 'plutôt à gauche' : targetPos > 70 ? 'plutôt à droite' : 'vers le centre';
+  const zones = expertMode ? ZONES_EXPERT : ZONES_NORMAL;
 
   const scoreMsgs   = ['Raté ! 😬', 'Proche ! 👍', 'Bien ! 🎯', '', 'Très bien ! ⭐', 'Parfait ! 🎉'];
   const scoreColors = [PALETTE.red, PALETTE.coral, PALETTE.amber, PALETTE.amber, PALETTE.green, PALETTE.green];
+
+  // Transition avec fondu
+  const changePhase = (p: Phase) => {
+    transOpacity.value = withTiming(0, { duration: 160 }, (done) => {
+      if (done) runOnJS(setPhase)(p);
+    });
+  };
+
+  // Compteur de score animé
+  const countUpScore = (target: number) => {
+    setDisplayScore(0);
+    if (target === 0) return;
+    let count = 0;
+    const tick = () => {
+      count++;
+      setDisplayScore(count);
+      if (count < target) setTimeout(tick, 140);
+    };
+    setTimeout(tick, 280);
+  };
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   const addPlayer    = () => { if (players.length < 5) setPlayers(p => [...p, { name: `Joueur ${p.length + 1}`, score: 0 }]); };
@@ -232,39 +290,57 @@ export default function HomeScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
+  const pickUnusedCard = (used: number[]): number => {
+    let idx = Math.floor(Math.random() * CARDS.length);
+    let tries = 0;
+    while (used.includes(idx) && tries < CARDS.length) { idx = (idx + 1) % CARDS.length; tries++; }
+    return idx;
+  };
+
   const nextRound = (pl: Player[], round: number, giver: number, used: number[]) => {
     const nr = round + 1;
-    if (nr > totalRounds) { setPhase('end'); return; }
-    let idx = Math.floor(Math.random() * CARDS.length);
-    while (used.includes(idx) && used.length < CARDS.length) idx = Math.floor(Math.random() * CARDS.length);
+    if (nr > totalRounds) { changePhase('end'); return; }
+    const idx = pickUnusedCard(used);
     setCurrentRound(nr); setCurrentCard(CARDS[idx]);
     setTargetPos(10 + Math.floor(Math.random() * 80));
     needleShared.value = withSpring(50, { damping: 12, stiffness: 150 });
     guessPosRef.current = 50;
-    setClue(''); setUsedCards([...used, idx]); setPhase('clue');
+    setClue(''); setUsedCards([...used, idx]);
+    setCardSkipped(false);
+    changePhase('clue');
+  };
+
+  const skipCard = () => {
+    if (cardSkipped) return;
+    const newIdx = pickUnusedCard([...usedCards]);
+    setCurrentCard(CARDS[newIdx]);
+    setUsedCards(u => [...u, newIdx]);
+    setCardSkipped(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   const submitClue = () => {
     if (!clue.trim()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setPhase('handoff');
+    changePhase('handoff');
   };
 
   const submitGuess = () => {
     const dist = Math.abs(guessPosRef.current - targetPos);
     let pts = 0;
-    if (dist <= ZONE_5) pts = 5;
-    else if (dist <= ZONE_3) pts = 3;
-    else if (dist <= ZONE_1) pts = 1;
+    if (dist <= zones.z5) pts = 5;
+    else if (dist <= zones.z3) pts = 3;
+    else if (dist <= zones.z1) pts = 1;
 
     const bonus = pts === 5;
     setTeamBonus(bonus);
 
     setPlayers(p => p.map((pl, i) => {
       if (i !== currentGiver) return { ...pl, score: pl.score + pts + (bonus ? 1 : 0) };
-      return bonus ? { ...pl, score: pl.score + 1 } : pl; // giver +1 si bullseye
+      return bonus ? { ...pl, score: pl.score + 1 } : pl;
     }));
     setRoundPoints(pts);
+    countUpScore(pts);
     setRoundHistory(h => [...h, {
       card: currentCard, clue, pts, bonus,
       giver: players[currentGiver].name,
@@ -280,7 +356,7 @@ export default function HomeScreen() {
     else if (pts === 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    setPhase('reveal');
+    changePhase('reveal');
   };
 
   const goNext = () => {
@@ -294,7 +370,7 @@ export default function HomeScreen() {
     scoreScale.value = 0;
     setPlayers(p => p.map(pl => ({ ...pl, score: 0 })));
     setRoundHistory([]);
-    setPhase('setup');
+    changePhase('setup');
   };
 
   // ── Cadran ────────────────────────────────────────────────────────────────────
@@ -305,7 +381,6 @@ export default function HomeScreen() {
       style={{ width: DIAL_W, height: DIAL_H, alignSelf: 'center', marginBottom: 12 }}
       {...(interactive ? pan.panHandlers : {})}
     >
-      {/* Fond sombre + secteurs (clippé au demi-cercle) */}
       <View style={{
         position: 'absolute', left: 0, top: 0,
         width: DIAL_W, height: DIAL_R + PIVOT_R,
@@ -318,7 +393,7 @@ export default function HomeScreen() {
             position: 'absolute',
             left: DIAL_R, top: DIAL_R - SEC_H / 2,
             width: DIAL_R, height: SEC_H,
-            backgroundColor: secColor(i, targetPos, showTarget),
+            backgroundColor: secColor(i, targetPos, showTarget, zones),
             // @ts-ignore
             transformOrigin: 'left center',
             transform: [{ rotate: `${-180 + (i + 0.5) * SEC_DEG}deg` }],
@@ -356,7 +431,7 @@ export default function HomeScreen() {
           }, needleRotStyle]} />
         )}
 
-        {/* Bout de l'aiguille (animé indépendamment) */}
+        {/* Bout de l'aiguille */}
         {showCursor && (
           <Animated.View style={[{
             position: 'absolute',
@@ -385,7 +460,6 @@ export default function HomeScreen() {
     </View>
   );
 
-  // ── Carte concept ─────────────────────────────────────────────────────────────
   const renderConcept = () => (
     <View style={s.conceptCard}>
       <Text style={[s.conceptWord, { color: PALETTE.blue }]}>{currentCard[0]}</Text>
@@ -394,7 +468,6 @@ export default function HomeScreen() {
     </View>
   );
 
-  // ── Barre de progression ──────────────────────────────────────────────────────
   const renderProgress = () => (
     <View style={s.progressWrap}>
       <View style={s.progressTrack}>
@@ -404,7 +477,6 @@ export default function HomeScreen() {
     </View>
   );
 
-  // ── Scores ────────────────────────────────────────────────────────────────────
   const sorted = [...players].sort((a, b) => b.score - a.score);
   const renderScores = (suffix = '') => sorted.map((p, i) => {
     const ci = players.findIndex(pl => pl.name === p.name);
@@ -422,6 +494,10 @@ export default function HomeScreen() {
     );
   });
 
+  // ── Timer helpers ─────────────────────────────────────────────────────────────
+  const timerColor = timeLeft <= 5 ? PALETTE.red : timeLeft <= 15 ? PALETTE.amber : PALETTE.green;
+  const timerUrgent = timerEnabled && phase === 'clue' && timeLeft <= 10;
+
   // ── Render ────────────────────────────────────────────────────────────────────
   const bg = PHASE_BG[phase] ?? PALETTE.purple;
   const showProgress = phase === 'clue' || phase === 'handoff' || phase === 'guess' || phase === 'reveal';
@@ -430,211 +506,280 @@ export default function HomeScreen() {
     <SafeAreaView style={[s.safe, { backgroundColor: bg }]}>
       <StatusBar barStyle="light-content" backgroundColor={bg} />
 
-      {/* ═══ ACCUEIL ═══ */}
-      {phase === 'home' && (
-        <Animated.View style={[s.home, homeStyle]}>
-          <Animated.Text style={[s.homeEmoji, logoStyle]}>🌊</Animated.Text>
-          <Text style={s.homeTitle}>Longueur{'\n'}d'onde</Text>
-          <Text style={s.homeSub}>Le jeu qui lit dans les esprits</Text>
-          <View style={s.waveDots}>
-            {[0.2, 0.45, 0.7, 0.45, 0.2].map((op, i) => (
-              <View key={i} style={[s.waveDot, { opacity: op, transform: [{ scale: 0.6 + op * 0.8 }] }]} />
-            ))}
-          </View>
-          <TouchableOpacity style={s.homeBtn} onPress={() => setPhase('setup')}>
-            <Text style={s.homeBtnTxt}>Jouer →</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setPhase('rules')}>
-            <Text style={s.homeLinkTxt}>Comment jouer ?</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      )}
+      <Animated.View style={[{ flex: 1 }, transStyle]}>
 
-      {/* ═══ RÈGLES ═══ */}
-      {phase === 'rules' && (
-        <ScrollView contentContainerStyle={s.rulesContainer}>
-          <Text style={s.rulesEmoji}>📖</Text>
-          <Text style={s.rulesTitle}>Comment jouer</Text>
-
-          {[
-            { n: '1', t: 'Le faiseur d\'indice', d: 'Un joueur voit où la cible se trouve sur le cadran (zone rouge). Les autres ne voient pas.' },
-            { n: '2', t: 'Donner un indice', d: 'Le faiseur d\'indice donne un seul mot ou courte phrase pour guider les autres vers la position.' },
-            { n: '3', t: 'Passer le téléphone', d: 'Les autres joueurs reçoivent le téléphone. Ils ne doivent pas voir le cadran avant.' },
-            { n: '4', t: 'Deviner ensemble', d: 'L\'équipe discute et place l\'aiguille là où elle pense que la cible se trouve.' },
-            { n: '5', t: 'Les points', d: 'Bullseye (±2.5%) : 5 pts • Proche (±10%) : 3 pts • Autour (±15%) : 1 pt • Raté : 0 pt' },
-            { n: '★', t: 'Bonus Équipe !', d: 'En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d\'indice.' },
-          ].map((rule, i) => (
-            <View key={i} style={s.ruleRow}>
-              <View style={s.ruleNum}><Text style={s.ruleNumTxt}>{rule.n}</Text></View>
-              <View style={{ flex: 1 }}>
-                <Text style={s.ruleTitle}>{rule.t}</Text>
-                <Text style={s.ruleDesc}>{rule.d}</Text>
-              </View>
+        {/* ═══ ACCUEIL ═══ */}
+        {phase === 'home' && (
+          <Animated.View style={[s.home, homeStyle]}>
+            <Animated.Text style={[s.homeEmoji, logoStyle]}>🌊</Animated.Text>
+            <Text style={s.homeTitle}>Longueur{'\n'}d'onde</Text>
+            <Text style={s.homeSub}>Le jeu qui lit dans les esprits</Text>
+            <View style={s.waveDots}>
+              {[0.2, 0.45, 0.7, 0.45, 0.2].map((op, i) => (
+                <View key={i} style={[s.waveDot, { opacity: op, transform: [{ scale: 0.6 + op * 0.8 }] }]} />
+              ))}
             </View>
-          ))}
+            <TouchableOpacity style={s.homeBtn} onPress={() => changePhase('setup')}>
+              <Text style={s.homeBtnTxt}>Jouer →</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => changePhase('rules')}>
+              <Text style={s.homeLinkTxt}>Comment jouer ?</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
 
-          <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 32 }]} onPress={() => setPhase('home')}>
-            <Text style={s.bigBtnTxt}>Retour à l'accueil</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      )}
+        {/* ═══ RÈGLES ═══ */}
+        {phase === 'rules' && (
+          <ScrollView contentContainerStyle={s.rulesContainer}>
+            <Text style={s.rulesEmoji}>📖</Text>
+            <Text style={s.rulesTitle}>Comment jouer</Text>
 
-      {/* ═══ JEUX ═══ */}
-      {phase !== 'home' && phase !== 'rules' && (
-        <>
-          {/* En-tête */}
-          <View style={[s.header, { backgroundColor: bg }]}>
-            {phase === 'setup'   && <><Text style={s.hTitle}>Configuration</Text><Text style={s.hSub}>Qui joue ? Combien de manches ?</Text></>}
-            {phase === 'clue'    && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>🎭 {players[currentGiver].name}</Text><Text style={s.hSub}>donne l'indice</Text></>}
-            {phase === 'handoff' && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>📱 Passez le téléphone</Text></>}
-            {phase === 'guess'   && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>🎯 À vous de jouer !</Text><Text style={s.hSub}>Touchez le cadran pour placer l'aiguille</Text></>}
-            {phase === 'reveal'  && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>Résultat</Text></>}
-            {phase === 'end'     && <><Text style={s.hEmoji}>🏆</Text><Text style={s.hTitle}>Fin de partie !</Text></>}
-            {showProgress && renderProgress()}
-          </View>
+            {[
+              { n: '1', t: 'Le faiseur d\'indice', d: 'Un joueur voit où la cible se trouve sur le cadran (zone rouge). Les autres ne voient pas.' },
+              { n: '2', t: 'Donner un indice', d: 'Le faiseur d\'indice donne un seul mot ou courte phrase pour guider les autres vers la position.' },
+              { n: '3', t: 'Passer le téléphone', d: 'Les autres joueurs reçoivent le téléphone. Ils ne doivent pas voir le cadran avant.' },
+              { n: '4', t: 'Deviner ensemble', d: 'L\'équipe discute et place l\'aiguille là où elle pense que la cible se trouve.' },
+              { n: '5', t: 'Les points', d: 'Bullseye (±2.5%) : 5 pts • Proche (±10%) : 3 pts • Autour (±15%) : 1 pt • Raté : 0 pt' },
+              { n: '★', t: 'Bonus Équipe !', d: 'En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d\'indice.' },
+            ].map((rule, i) => (
+              <View key={i} style={s.ruleRow}>
+                <View style={s.ruleNum}><Text style={s.ruleNumTxt}>{rule.n}</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.ruleTitle}>{rule.t}</Text>
+                  <Text style={s.ruleDesc}>{rule.d}</Text>
+                </View>
+              </View>
+            ))}
 
-          {/* Feuille blanche */}
-          <View style={s.sheet}>
-            <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 32 }]} onPress={() => changePhase('home')}>
+              <Text style={s.bigBtnTxt}>Retour à l'accueil</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )}
 
-              {/* SETUP */}
-              {phase === 'setup' && <>
-                <Text style={s.label}>JOUEURS</Text>
-                {players.map((p, i) => (
-                  <View key={i} style={s.playerRow}>
-                    <View style={[s.av, { backgroundColor: PLAYER_COLORS[i] }]}>
-                      <Text style={s.avTxt}>{initials(p.name)}</Text>
-                    </View>
-                    <TextInput style={s.playerInput} value={p.name} onChangeText={t => updateName(i, t)} placeholder={`Joueur ${i + 1}`} placeholderTextColor={PALETTE.gray400} />
-                    {players.length > 2 && <TouchableOpacity style={s.removeBtn} onPress={() => removePlayer(i)}><Text style={s.removeTxt}>✕</Text></TouchableOpacity>}
+        {/* ═══ JEU ═══ */}
+        {phase !== 'home' && phase !== 'rules' && (
+          <>
+            {/* En-tête */}
+            <View style={[s.header, { backgroundColor: bg }]}>
+              {phase === 'setup'   && <><Text style={s.hTitle}>Configuration</Text><Text style={s.hSub}>Qui joue ? Combien de manches ?</Text></>}
+              {phase === 'clue'    && (
+                <>
+                  <View style={s.hRow}>
+                    <Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text>
+                    {timerEnabled && (
+                      <View style={[s.timerBadge, { backgroundColor: timerColor }]}>
+                        <Text style={s.timerTxt}>⏱ {timeLeft}s</Text>
+                      </View>
+                    )}
                   </View>
-                ))}
-                {players.length < 5 && (
-                  <TouchableOpacity style={s.addBtn} onPress={addPlayer}><Text style={s.addTxt}>+ Ajouter un joueur</Text></TouchableOpacity>
-                )}
+                  <Text style={s.hTitle}>🎭 {players[currentGiver].name}</Text>
+                  <Text style={s.hSub}>donne l'indice{timerUrgent ? ' — DÉPÊCHE-TOI !' : ''}</Text>
+                </>
+              )}
+              {phase === 'handoff' && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>📱 Passez le téléphone</Text></>}
+              {phase === 'guess'   && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>🎯 À vous de jouer !</Text><Text style={s.hSub}>Touchez le cadran pour placer l'aiguille</Text></>}
+              {phase === 'reveal'  && <><Text style={s.hBadge}>MANCHE {currentRound} / {totalRounds}</Text><Text style={s.hTitle}>Résultat</Text></>}
+              {phase === 'end'     && <><Text style={s.hEmoji}>🏆</Text><Text style={s.hTitle}>Fin de partie !</Text></>}
+              {showProgress && renderProgress()}
+            </View>
 
-                <Text style={[s.label, { marginTop: 28 }]}>NOMBRE DE MANCHES</Text>
-                <View style={s.counter}>
-                  <TouchableOpacity style={s.counterBtn} onPress={() => setTotalRounds(r => Math.max(3, r - 1))}>
-                    <Text style={s.counterBtnTxt}>−</Text>
-                  </TouchableOpacity>
-                  <Text style={s.counterVal}>{totalRounds}</Text>
-                  <TouchableOpacity style={s.counterBtn} onPress={() => setTotalRounds(r => Math.min(30, r + 1))}>
-                    <Text style={s.counterBtnTxt}>+</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 36 }]} onPress={startGame}>
-                  <Text style={s.bigBtnTxt}>Commencer la partie →</Text>
-                </TouchableOpacity>
-              </>}
+            {/* Feuille blanche */}
+            <View style={s.sheet}>
+              <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-              {/* INDICE */}
-              {phase === 'clue' && <>
-                {renderConcept()}
-                <View style={s.hintBox}>
-                  <Text style={s.hintTxt}>La cible est <Text style={s.hintBold}>{getHint()}</Text> ({Math.round(targetPos)} %)</Text>
-                </View>
-                {renderDial({ showTarget: true })}
-                <Text style={s.label}>VOTRE INDICE</Text>
-                <TextInput style={s.clueInput} value={clue} onChangeText={setClue} placeholder="Un mot ou une courte phrase..." placeholderTextColor={PALETTE.gray400} maxLength={40} autoFocus />
-                <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.blue }]} onPress={submitClue}>
-                  <Text style={s.bigBtnTxt}>Valider l'indice →</Text>
-                </TouchableOpacity>
-              </>}
+                {/* SETUP */}
+                {phase === 'setup' && <>
+                  <Text style={s.label}>JOUEURS</Text>
+                  {players.map((p, i) => (
+                    <View key={i} style={s.playerRow}>
+                      <View style={[s.av, { backgroundColor: PLAYER_COLORS[i] }]}>
+                        <Text style={s.avTxt}>{initials(p.name)}</Text>
+                      </View>
+                      <TextInput style={s.playerInput} value={p.name} onChangeText={t => updateName(i, t)} placeholder={`Joueur ${i + 1}`} placeholderTextColor={PALETTE.gray400} />
+                      {players.length > 2 && <TouchableOpacity style={s.removeBtn} onPress={() => removePlayer(i)}><Text style={s.removeTxt}>✕</Text></TouchableOpacity>}
+                    </View>
+                  ))}
+                  {players.length < 5 && (
+                    <TouchableOpacity style={s.addBtn} onPress={addPlayer}><Text style={s.addTxt}>+ Ajouter un joueur</Text></TouchableOpacity>
+                  )}
 
-              {/* HANDOFF */}
-              {phase === 'handoff' && <>
-                <View style={s.handoffBox}>
-                  <Text style={s.handoffEmoji}>🤫</Text>
-                  <Text style={s.handoffTitle}>Passez maintenant le téléphone aux autres joueurs.</Text>
-                  <Text style={s.handoffSub}>Ils ne doivent pas avoir vu le cadran.</Text>
-                </View>
-                <View style={[s.clueBox, { marginBottom: 24 }]}>
-                  <Text style={s.clueBoxLbl}>L'INDICE DONNÉ</Text>
-                  <Text style={s.clueBoxTxt}>"{clue}"</Text>
-                </View>
-                <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.teal }]} onPress={() => setPhase('guess')}>
-                  <Text style={s.bigBtnTxt}>✓ Téléphone passé, on joue !</Text>
-                </TouchableOpacity>
-              </>}
+                  <Text style={[s.label, { marginTop: 28 }]}>NOMBRE DE MANCHES</Text>
+                  <View style={s.counter}>
+                    <TouchableOpacity style={s.counterBtn} onPress={() => setTotalRounds(r => Math.max(3, r - 1))}>
+                      <Text style={s.counterBtnTxt}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={s.counterVal}>{totalRounds}</Text>
+                    <TouchableOpacity style={s.counterBtn} onPress={() => setTotalRounds(r => Math.min(30, r + 1))}>
+                      <Text style={s.counterBtnTxt}>+</Text>
+                    </TouchableOpacity>
+                  </View>
 
-              {/* DEVINETTE */}
-              {phase === 'guess' && <>
-                {renderConcept()}
-                <View style={s.clueBox}>
-                  <Text style={s.clueBoxLbl}>L'INDICE</Text>
-                  <Text style={s.clueBoxTxt}>"{clue}"</Text>
-                </View>
-                {renderDial({ showCursor: true, interactive: true })}
-                <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.teal, marginTop: 8 }]} onPress={submitGuess}>
-                  <Text style={s.bigBtnTxt}>Valider ma position →</Text>
-                </TouchableOpacity>
-              </>}
+                  {/* Options avancées */}
+                  <Text style={[s.label, { marginTop: 28 }]}>OPTIONS</Text>
 
-              {/* RÉVÉLATION */}
-              {phase === 'reveal' && <>
-                {renderConcept()}
-                <View style={s.clueBox}>
-                  <Text style={s.clueBoxLbl}>L'INDICE</Text>
-                  <Text style={s.clueBoxTxt}>"{clue}"</Text>
-                </View>
-                {renderDial({ showTarget: true, showCursor: true })}
-                <Animated.View style={[s.scoreReveal, scoreStyle]}>
-                  <Text style={[s.scoreNum, { color: scoreColors[roundPoints] }]}>+{roundPoints}</Text>
-                  <Text style={s.scoreMsg}>{scoreMsgs[roundPoints]}</Text>
-                  {teamBonus && (
-                    <View style={s.bonusBadge}>
-                      <Text style={s.bonusTxt}>🎯 BONUS ÉQUIPE  +1</Text>
+                  {/* Timer */}
+                  <View style={s.optionRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.optionTitle}>⏱ Chrono par manche</Text>
+                      <Text style={s.optionDesc}>Limite de temps pour donner l'indice</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[s.toggle, timerEnabled && s.toggleOn]}
+                      onPress={() => { setTimerEnabled(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                    >
+                      <View style={[s.toggleKnob, timerEnabled && s.toggleKnobOn]} />
+                    </TouchableOpacity>
+                  </View>
+                  {timerEnabled && (
+                    <View style={[s.counter, { marginTop: 8, marginBottom: 4 }]}>
+                      <TouchableOpacity style={s.counterBtnSm} onPress={() => setTimerDuration(d => Math.max(15, d - 15))}>
+                        <Text style={s.counterBtnTxt}>−</Text>
+                      </TouchableOpacity>
+                      <Text style={s.counterValSm}>{timerDuration}s</Text>
+                      <TouchableOpacity style={s.counterBtnSm} onPress={() => setTimerDuration(d => Math.min(120, d + 15))}>
+                        <Text style={s.counterBtnTxt}>+</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
-                </Animated.View>
-                <Text style={s.label}>SCORES</Text>
-                {renderScores()}
-                <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.amber, marginTop: 24 }]} onPress={goNext}>
-                  <Text style={s.bigBtnTxt}>{currentRound >= totalRounds ? 'Voir les résultats →' : 'Manche suivante →'}</Text>
-                </TouchableOpacity>
-              </>}
 
-              {/* FIN */}
-              {phase === 'end' && <>
-                <Text style={s.label}>CLASSEMENT FINAL</Text>
-                {renderScores(' pts')}
+                  {/* Mode expert */}
+                  <View style={[s.optionRow, { marginTop: 12 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.optionTitle}>🔥 Mode Expert</Text>
+                      <Text style={s.optionDesc}>Zones plus petites — bullseye ±1%, proche ±5%, autour ±8%</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[s.toggle, expertMode && s.toggleOn]}
+                      onPress={() => { setExpertMode(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                    >
+                      <View style={[s.toggleKnob, expertMode && s.toggleKnobOn]} />
+                    </TouchableOpacity>
+                  </View>
 
-                {/* Historique des manches */}
-                <Text style={[s.label, { marginTop: 28 }]}>RÉCAP DES MANCHES</Text>
-                {roundHistory.map((r, i) => (
-                  <View key={i} style={s.historyRow}>
-                    <View style={s.historyLeft}>
-                      <Text style={s.historyNum}>{i + 1}</Text>
-                      <View>
-                        <Text style={s.historyCard}>{r.card[0]} ↔ {r.card[1]}</Text>
-                        <Text style={s.historyClue}>"{r.clue}" <Text style={s.historyGiver}>— {r.giver}</Text></Text>
+                  <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 36 }]} onPress={startGame}>
+                    <Text style={s.bigBtnTxt}>Commencer la partie →</Text>
+                  </TouchableOpacity>
+                </>}
+
+                {/* INDICE */}
+                {phase === 'clue' && <>
+                  {renderConcept()}
+                  <View style={s.hintBox}>
+                    <Text style={s.hintTxt}>La cible est <Text style={s.hintBold}>{getHint()}</Text> ({Math.round(targetPos)} %)</Text>
+                  </View>
+                  {renderDial({ showTarget: true })}
+                  <Text style={s.label}>VOTRE INDICE</Text>
+                  <TextInput style={s.clueInput} value={clue} onChangeText={setClue} placeholder="Un mot ou une courte phrase..." placeholderTextColor={PALETTE.gray400} maxLength={40} autoFocus />
+                  <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.blue }]} onPress={submitClue}>
+                    <Text style={s.bigBtnTxt}>Valider l'indice →</Text>
+                  </TouchableOpacity>
+                  {!cardSkipped && (
+                    <TouchableOpacity style={s.skipBtn} onPress={skipCard}>
+                      <Text style={s.skipTxt}>↩ Passer cette carte</Text>
+                    </TouchableOpacity>
+                  )}
+                </>}
+
+                {/* HANDOFF */}
+                {phase === 'handoff' && <>
+                  <View style={s.handoffBox}>
+                    <Text style={s.handoffEmoji}>🤫</Text>
+                    <Text style={s.handoffTitle}>Passez maintenant le téléphone aux autres joueurs.</Text>
+                    <Text style={s.handoffSub}>Ils ne doivent pas avoir vu le cadran.</Text>
+                  </View>
+                  <View style={[s.clueBox, { marginBottom: 24 }]}>
+                    <Text style={s.clueBoxLbl}>L'INDICE DONNÉ</Text>
+                    <Text style={s.clueBoxTxt}>"{clue}"</Text>
+                  </View>
+                  <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.teal }]} onPress={() => changePhase('guess')}>
+                    <Text style={s.bigBtnTxt}>✓ Téléphone passé, on joue !</Text>
+                  </TouchableOpacity>
+                </>}
+
+                {/* DEVINETTE */}
+                {phase === 'guess' && <>
+                  {renderConcept()}
+                  <View style={s.clueBox}>
+                    <Text style={s.clueBoxLbl}>L'INDICE</Text>
+                    <Text style={s.clueBoxTxt}>"{clue}"</Text>
+                  </View>
+                  {renderDial({ showCursor: true, interactive: true })}
+                  <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.teal, marginTop: 8 }]} onPress={submitGuess}>
+                    <Text style={s.bigBtnTxt}>Valider ma position →</Text>
+                  </TouchableOpacity>
+                </>}
+
+                {/* RÉVÉLATION */}
+                {phase === 'reveal' && <>
+                  {renderConcept()}
+                  <View style={s.clueBox}>
+                    <Text style={s.clueBoxLbl}>L'INDICE</Text>
+                    <Text style={s.clueBoxTxt}>"{clue}"</Text>
+                  </View>
+                  {renderDial({ showTarget: true, showCursor: true })}
+                  <Animated.View style={[s.scoreReveal, scoreStyle]}>
+                    <Text style={[s.scoreNum, { color: scoreColors[roundPoints] }]}>+{displayScore}</Text>
+                    <Text style={s.scoreMsg}>{scoreMsgs[roundPoints]}</Text>
+                    {teamBonus && (
+                      <View style={s.bonusBadge}>
+                        <Text style={s.bonusTxt}>🎯 BONUS ÉQUIPE  +1</Text>
+                      </View>
+                    )}
+                    {expertMode && (
+                      <View style={[s.bonusBadge, { backgroundColor: PALETTE.amberLight, marginTop: 6 }]}>
+                        <Text style={[s.bonusTxt, { color: PALETTE.amberDark }]}>🔥 Mode Expert</Text>
+                      </View>
+                    )}
+                  </Animated.View>
+                  <Text style={s.label}>SCORES</Text>
+                  {renderScores()}
+                  <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.amber, marginTop: 24 }]} onPress={goNext}>
+                    <Text style={s.bigBtnTxt}>{currentRound >= totalRounds ? 'Voir les résultats →' : 'Manche suivante →'}</Text>
+                  </TouchableOpacity>
+                </>}
+
+                {/* FIN */}
+                {phase === 'end' && <>
+                  <Text style={s.label}>CLASSEMENT FINAL</Text>
+                  {renderScores(' pts')}
+
+                  <Text style={[s.label, { marginTop: 28 }]}>RÉCAP DES MANCHES</Text>
+                  {roundHistory.map((r, i) => (
+                    <View key={i} style={s.historyRow}>
+                      <View style={s.historyLeft}>
+                        <Text style={s.historyNum}>{i + 1}</Text>
+                        <View>
+                          <Text style={s.historyCard}>{r.card[0]} ↔ {r.card[1]}</Text>
+                          <Text style={s.historyClue}>"{r.clue}" <Text style={s.historyGiver}>— {r.giver}</Text></Text>
+                        </View>
+                      </View>
+                      <View style={s.historyRight}>
+                        <Text style={[s.historyPts, { color: r.pts >= 4 ? PALETTE.green : r.pts >= 2 ? PALETTE.amber : PALETTE.red }]}>
+                          +{r.pts}{r.bonus ? '+1★' : ''}
+                        </Text>
                       </View>
                     </View>
-                    <View style={s.historyRight}>
-                      <Text style={[s.historyPts, { color: r.pts >= 4 ? PALETTE.green : r.pts >= 2 ? PALETTE.amber : PALETTE.red }]}>
-                        +{r.pts}{r.bonus ? '+1★' : ''}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
+                  ))}
 
-                <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 32 }]} onPress={restart}>
-                  <Text style={s.bigBtnTxt}>Rejouer 🎮</Text>
-                </TouchableOpacity>
-              </>}
+                  <TouchableOpacity style={[s.bigBtn, { backgroundColor: PALETTE.purple, marginTop: 32 }]} onPress={restart}>
+                    <Text style={s.bigBtnTxt}>Rejouer 🎮</Text>
+                  </TouchableOpacity>
+                </>}
 
-            </ScrollView>
-          </View>
-
-          {/* Confettis sur l'écran de fin */}
-          {phase === 'end' && (
-            <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
-              {CONFETTI_DATA.map((c, i) => <ConfettiPiece key={i} {...c} />)}
+              </ScrollView>
             </View>
-          )}
-        </>
-      )}
+
+            {/* Confettis */}
+            {phase === 'end' && (
+              <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+                {CONFETTI_DATA.map((c, i) => <ConfettiPiece key={i} {...c} />)}
+              </View>
+            )}
+          </>
+        )}
+
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -668,8 +813,13 @@ const s = StyleSheet.create({
   header:  { paddingHorizontal: 24, paddingTop: 14, paddingBottom: 16, alignItems: 'center' },
   hEmoji:  { fontSize: 44, marginBottom: 4 },
   hBadge:  { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.62)', letterSpacing: 1.8, marginBottom: 4 },
+  hRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
   hTitle:  { fontSize: 24, fontWeight: '800', color: '#fff', textAlign: 'center', marginBottom: 4 },
   hSub:    { fontSize: 13, color: 'rgba(255,255,255,0.7)', textAlign: 'center' },
+
+  // Timer badge
+  timerBadge: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3 },
+  timerTxt:   { color: '#fff', fontSize: 13, fontWeight: '800' },
 
   // Barre de progression
   progressWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
@@ -692,15 +842,30 @@ const s = StyleSheet.create({
   addBtn:      { borderWidth: 1.5, borderColor: PALETTE.gray200, borderStyle: 'dashed', borderRadius: 12, padding: 13, alignItems: 'center', marginTop: 2 },
   addTxt:      { color: PALETTE.gray600, fontSize: 14, fontWeight: '500' },
 
+  // Options (timer, expert)
+  optionRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6 },
+  optionTitle: { fontSize: 14, fontWeight: '700', color: PALETTE.dark, marginBottom: 2 },
+  optionDesc:  { fontSize: 12, color: PALETTE.gray400, lineHeight: 16 },
+  toggle:      { width: 48, height: 28, borderRadius: 14, backgroundColor: PALETTE.gray200, justifyContent: 'center', paddingHorizontal: 3 },
+  toggleOn:    { backgroundColor: PALETTE.purple },
+  toggleKnob:  { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 },
+  toggleKnobOn: { alignSelf: 'flex-end' },
+
   // Compteur manches
   counter:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   counterBtn:    { width: 52, height: 52, borderRadius: 26, backgroundColor: PALETTE.gray100, alignItems: 'center', justifyContent: 'center' },
+  counterBtnSm:  { width: 40, height: 40, borderRadius: 20, backgroundColor: PALETTE.gray100, alignItems: 'center', justifyContent: 'center' },
   counterBtnTxt: { fontSize: 26, fontWeight: '300', color: PALETTE.dark },
   counterVal:    { fontSize: 48, fontWeight: '800', color: PALETTE.dark, width: 90, textAlign: 'center' },
+  counterValSm:  { fontSize: 28, fontWeight: '700', color: PALETTE.dark, width: 70, textAlign: 'center' },
 
   // Bouton
   bigBtn:    { borderRadius: 16, padding: 17, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5 },
   bigBtnTxt: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
+  // Skip
+  skipBtn: { alignItems: 'center', paddingVertical: 14, marginTop: 6 },
+  skipTxt: { color: PALETTE.gray400, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
 
   // Concept
   conceptCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: PALETTE.gray100, borderRadius: 18, paddingHorizontal: 20, paddingVertical: 18, marginBottom: 16 },
