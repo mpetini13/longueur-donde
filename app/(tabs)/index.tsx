@@ -33,21 +33,21 @@ const DIAL_W = SCREEN_WIDTH - 48;
 const DIAL_R = DIAL_W / 2;
 
 // ── Cadran ────────────────────────────────────────────────────────────────────
-const N_SEC    = 60;                         // beaucoup de secteurs → transitions douces
+const N_SEC    = 100;                        // 100 sections = 1% par section
 const SEC_DEG  = 180 / N_SEC;
-const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 1.10;
-const SEC_PCT  = 100 / N_SEC;
-const NEEDLE_W = 6;
-const NEEDLE_L = DIAL_R * 0.70;
-const HUB_R    = Math.round(DIAL_R * 0.26); // hub bien visible
-const LABEL_H  = 36;
+const SEC_H    = 2 * DIAL_R * Math.tan((SEC_DEG / 2) * Math.PI / 180) * 1.12;
+const SEC_PCT  = 100 / N_SEC;                // = 1
+const NEEDLE_W = 8;                          // aiguille un peu plus épaisse
+const NEEDLE_L = DIAL_R * 0.72;
+const HUB_R    = Math.round(DIAL_R * 0.15); // hub plus petit
+const LABEL_H  = 40;
 const DIAL_H   = DIAL_R + HUB_R + LABEL_H;
 
 // ── Zones ─────────────────────────────────────────────────────────────────────
-// Normal : zones larges pour ressembler au jeu physique
-// Expert : zones serrées comme la version originale
-const ZONES_NORMAL = { z5: 7, z3: 14, z1: 21 };
-const ZONES_EXPERT = { z5: 2.5, z3: 5, z1: 7 };
+// Normal : ±2% rouge, ±4% orange, ±6% jaune
+// Expert : ±1% rouge, ±2% orange, ±3% jaune
+const ZONES_NORMAL = { z5: 2, z3: 4, z1: 6 };
+const ZONES_EXPERT = { z5: 1, z3: 2, z1: 3 };
 
 // ── Géométrie ─────────────────────────────────────────────────────────────────
 function pctToAngle(pct: number): number {
@@ -488,7 +488,7 @@ export default function HomeScreen() {
           {/* ── Chiffres sur les zones ── */}
           {showTarget && (() => {
             const z = zones;
-            const r = DIAL_R * 0.60;
+            const r = DIAL_R * 0.78; // plus haut dans l'arc (vers l'extérieur)
             const items: Array<{ pct: number; pts: string }> = [
               { pct: targetPos,                         pts: '5' },
               { pct: targetPos + (z.z5 + z.z3) / 2,    pts: '3' },
@@ -504,11 +504,11 @@ export default function HomeScreen() {
               return (
                 <Text key={i} style={{
                   position: 'absolute',
-                  left: cx - 11, top: cy - 11,
-                  width: 22, height: 22,
-                  textAlign: 'center', lineHeight: 22,
-                  fontSize: 13, fontWeight: '900',
-                  color: 'rgba(255,255,255,0.95)',
+                  left: cx - 9, top: cy - 9,
+                  width: 18, height: 18,
+                  textAlign: 'center', lineHeight: 18,
+                  fontSize: 11, fontWeight: '900',
+                  color: 'rgba(255,255,255,0.92)',
                 }}>{pts}</Text>
               );
             });
@@ -568,11 +568,11 @@ export default function HomeScreen() {
         }} />
 
         {/* ── Étiquettes (hors overflow:hidden) ── */}
-        <Text style={[s.dialLbl, s.dialLblL, { top: DIAL_R + HUB_R + 7 }]}>
-          ← {currentCard[0]}
+        <Text style={[s.dialLbl, s.dialLblL, { top: DIAL_R + HUB_R + 8 }]}>
+          {currentCard[0]}
         </Text>
-        <Text style={[s.dialLbl, s.dialLblR, { top: DIAL_R + HUB_R + 7 }]}>
-          {currentCard[1]} →
+        <Text style={[s.dialLbl, s.dialLblR, { top: DIAL_R + HUB_R + 8 }]}>
+          {currentCard[1]}
         </Text>
       </View>
     );
@@ -710,7 +710,7 @@ export default function HomeScreen() {
               { n: '2', t: "Donner un indice", d: "Un seul mot ou courte phrase pour guider les autres vers la position." },
               { n: '3', t: "Passer le téléphone", d: "Les autres reçoivent le téléphone. Ils ne doivent pas avoir vu le cadran." },
               { n: '4', t: "Deviner ensemble", d: "L'équipe discute et place l'aiguille là où elle pense que la cible se trouve." },
-              { n: '5', t: "Les points", d: "Bullseye (±7%) : 5 pts • Proche (±14%) : 3 pts • Autour (±21%) : 1 pt • Raté : 0 pt" },
+              { n: '5', t: "Les points", d: "Bullseye (±2%) : 5 pts • Proche (±4%) : 3 pts • Autour (±6%) : 1 pt • Raté : 0 pt" },
               { n: '★', t: "Bonus Équipe !", d: "En cas de bullseye, tout le monde gagne +1 pt bonus, y compris le faiseur d'indice." },
             ].map((rule, i) => (
               <View key={i} style={s.ruleRow}>
@@ -893,7 +893,7 @@ export default function HomeScreen() {
                   <View style={[s.optionRow, { marginTop: 12 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={s.optionTitle}>🔥 Mode Expert</Text>
-                      <Text style={s.optionDesc}>Zones resserrées — bullseye ±2.5%, proche ±5%, autour ±7%</Text>
+                      <Text style={s.optionDesc}>Zones ultra-serrées — bullseye ±1%, proche ±2%, autour ±3%</Text>
                     </View>
                     <TouchableOpacity activeOpacity={0.8} style={[s.toggle, expertMode && s.toggleOn]} onPress={() => { setExpertMode(e => !e); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}>
                       <View style={[s.toggleKnob, expertMode && s.toggleKnobOn]} />
@@ -1173,7 +1173,7 @@ const s = StyleSheet.create({
   clueBoxLbl: { fontSize: 10, fontWeight: '700', color: PALETTE.teal, letterSpacing: 1.6, marginBottom: 4 },
   clueBoxTxt: { fontSize: 22, fontWeight: '800', color: PALETTE.tealDark },
 
-  dialLbl:  { position: 'absolute', fontSize: 13, fontWeight: '700', color: PALETTE.gray600 },
+  dialLbl:  { position: 'absolute', fontSize: 15, fontWeight: '800', color: PALETTE.dark },
   dialLblL: { left: 0 },
   dialLblR: { right: 0, textAlign: 'right' },
 
